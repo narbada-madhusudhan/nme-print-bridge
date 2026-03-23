@@ -477,22 +477,81 @@ func listPrintersUnix() ([]PrinterInfo, error) {
 	if err != nil {
 		return []PrinterInfo{}, nil
 	}
+
+	// Also get USB devices to check physical connection
+	usbDevices := getConnectedUSBPrinters()
+
 	var printers []PrinterInfo
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.HasPrefix(line, "printer ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				printers = append(printers, PrinterInfo{
-					Name:    parts[1],
-					Enabled: strings.Contains(line, "enabled"),
-				})
+				name := parts[1]
+				// "enabled" from lpstat just means the driver is installed
+				// Check if actually reachable: not disabled, and if USB, physically connected
+				enabled := strings.Contains(line, "enabled") && !strings.Contains(line, "disabled")
+				// If we have USB device info, check physical connection
+				if len(usbDevices) > 0 {
+					_, isUSBConnected := usbDevices[name]
+					if !isUSBConnected {
+						// Check with normalized name (replace spaces/dashes with underscores)
+						for usbName := range usbDevices {
+							if normalizePN(usbName) == normalizePN(name) {
+								isUSBConnected = true
+								break
+							}
+						}
+					}
+					// If it's a USB printer and not physically connected, mark offline
+					if !isUSBConnected && !isNetworkPrinter(name) {
+						enabled = false
+					}
+				}
+				printers = append(printers, PrinterInfo{Name: name, Enabled: enabled})
 			}
 		}
 	}
 	return printers, nil
 }
 
+func normalizePN(name string) string {
+	return strings.NewReplacer(" ", "_", "-", "_").Replace(strings.ToLower(name))
+}
+
+func isNetworkPrinter(name string) bool {
+	// Network printers typically start with IP-like patterns
+	return strings.HasPrefix(name, "_") && strings.Contains(name, "_")
+}
+
+// getConnectedUSBPrinters returns currently connected USB printer names
+func getConnectedUSBPrinters() map[string]bool {
+	if runtime.GOOS == "darwin" {
+		return getConnectedUSBPrintersMac()
+	}
+	return map[string]bool{}
+}
+
+func getConnectedUSBPrintersMac() map[string]bool {
+	// Use system_profiler to check physically connected USB devices
+	out, err := exec.Command("system_profiler", "SPUSBDataType", "-detailLevel", "mini").CombinedOutput()
+	if err != nil {
+		return map[string]bool{}
+	}
+	devices := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "USB") {
+			name := strings.TrimSuffix(trimmed, ":")
+			devices[name] = true
+			// Also store normalized version
+			devices[normalizePN(name)] = true
+		}
+	}
+	return devices
+}
+
 func listPrintersWindows() ([]PrinterInfo, error) {
+	// PrinterStatus: 0=Normal/Other, 1=Paused, 2=Error, 3=Deleting, 4=PaperJam, 5=PaperOut, 6=ManualFeed, 7=PaperProblem, 8=Offline
 	out, err := exec.Command("powershell", "-Command",
 		`Get-Printer | Select-Object Name, PrinterStatus | ConvertTo-Json`).CombinedOutput()
 	if err != nil {
@@ -516,7 +575,10 @@ func listPrintersWindows() ([]PrinterInfo, error) {
 	var printers []PrinterInfo
 	for _, item := range items {
 		name, _ := item["Name"].(string)
-		printers = append(printers, PrinterInfo{Name: name, Enabled: true})
+		// PrinterStatus 0 = Normal, anything else = problem
+		status, _ := item["PrinterStatus"].(float64)
+		enabled := status == 0
+		printers = append(printers, PrinterInfo{Name: name, Enabled: enabled})
 	}
 	return printers, nil
 }
