@@ -1,4 +1,4 @@
-# Print Bridge
+# NME Print Bridge
 
 Lightweight thermal printer bridge for web-based POS systems. Single binary, zero dependencies, zero dialogs.
 
@@ -8,16 +8,16 @@ Connects web browsers to thermal printers via a localhost HTTP API. Supports net
 
 | Platform | Download |
 |----------|----------|
-| **Windows** | [print-bridge-windows-amd64.exe](https://github.com/narbada-madhusudhan/print-bridge/releases/latest/download/print-bridge-windows-amd64.exe) |
-| **macOS (Apple Silicon)** | [print-bridge-mac-arm64](https://github.com/narbada-madhusudhan/print-bridge/releases/latest/download/print-bridge-mac-arm64) |
-| **macOS (Intel)** | [print-bridge-mac-amd64](https://github.com/narbada-madhusudhan/print-bridge/releases/latest/download/print-bridge-mac-amd64) |
+| **Windows** | [print-bridge-windows-amd64.exe](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-windows-amd64.exe) |
+| **macOS (Apple Silicon)** | [print-bridge-mac-arm64](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-mac-arm64) |
+| **macOS (Intel)** | [print-bridge-mac-amd64](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-mac-amd64) |
 
 ## Quick Start
 
 ### Windows
 1. Download `print-bridge-windows-amd64.exe`
 2. Double-click to run
-3. Done — Print Bridge is running on `http://localhost:9120`
+3. Done — NME Print Bridge is running on `http://localhost:9120`
 
 ### macOS
 ```bash
@@ -55,7 +55,7 @@ curl http://localhost:9120/printers
 
 ## Security
 
-Print Bridge uses certificate-based trust. Each hotel gets a signed certificate that specifies which web origins can connect. The certificate is verified against a baked-in root public key.
+NME Print Bridge uses certificate-based trust. Each hotel gets a signed certificate that specifies which web origins can connect. The certificate is verified against a baked-in root public key.
 
 - Only whitelisted origins can make requests (CORS)
 - `localhost:3000` and `localhost:3001` are always allowed for development

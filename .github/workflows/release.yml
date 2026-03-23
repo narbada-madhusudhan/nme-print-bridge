@@ -16,15 +16,19 @@ jobs:
           - goos: darwin
             goarch: arm64
             suffix: mac-arm64
+            ldflags_extra: ""
           - goos: darwin
             goarch: amd64
             suffix: mac-amd64
+            ldflags_extra: ""
           - goos: windows
             goarch: amd64
             suffix: windows-amd64.exe
+            ldflags_extra: "-H windowsgui"
           - goos: linux
             goarch: amd64
             suffix: linux-amd64
+            ldflags_extra: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -32,13 +36,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
+          cache: false
 
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
         run: |
-          go build -ldflags "-X main.RootPublicKeyB64=${{ secrets.ROOT_PUBLIC_KEY }} -X main.Version=${{ github.ref_name }}" \
+          go build -ldflags "-s -w -X main.RootPublicKeyB64=${{ secrets.ROOT_PUBLIC_KEY }} -X main.Version=${{ github.ref_name }} ${{ matrix.ldflags_extra }}" \
             -o print-bridge-${{ matrix.suffix }} main.go
 
       - name: Upload artifact
@@ -47,8 +53,86 @@ jobs:
           name: print-bridge-${{ matrix.suffix }}
           path: print-bridge-${{ matrix.suffix }}
 
-  release:
+  # Build macOS .app bundle + DMG
+  mac-dmg:
+    runs-on: macos-latest
     needs: build
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            suffix: mac-arm64
+          - arch: amd64
+            suffix: mac-amd64
+    steps:
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: print-bridge-${{ matrix.suffix }}
+
+      - name: Create .app bundle
+        run: |
+          APP_NAME="Print Bridge.app"
+          mkdir -p "${APP_NAME}/Contents/MacOS"
+          mkdir -p "${APP_NAME}/Contents/Resources"
+
+          # Copy binary
+          cp print-bridge-${{ matrix.suffix }} "${APP_NAME}/Contents/MacOS/print-bridge"
+          chmod +x "${APP_NAME}/Contents/MacOS/print-bridge"
+
+          # Info.plist
+          cat > "${APP_NAME}/Contents/Info.plist" << 'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>Print Bridge</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.narbada.print-bridge</string>
+              <key>CFBundleVersion</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundleExecutable</key>
+              <string>print-bridge</string>
+              <key>LSUIElement</key>
+              <true/>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Create wrapper script that runs with --install on first launch
+          mv "${APP_NAME}/Contents/MacOS/print-bridge" "${APP_NAME}/Contents/MacOS/print-bridge-bin"
+          cat > "${APP_NAME}/Contents/MacOS/print-bridge" << 'LAUNCHER'
+          #!/bin/bash
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          CONFIG="$HOME/.printbridge/config.json"
+          if [ ! -f "$CONFIG" ]; then
+            "$DIR/print-bridge-bin" --install
+          fi
+          exec "$DIR/print-bridge-bin"
+          LAUNCHER
+          chmod +x "${APP_NAME}/Contents/MacOS/print-bridge"
+
+      - name: Create DMG
+        run: |
+          mkdir dmg-contents
+          cp -r "Print Bridge.app" dmg-contents/
+          ln -s /Applications dmg-contents/Applications
+          hdiutil create -volname "Print Bridge" -srcfolder dmg-contents -ov -format UDZO \
+            "print-bridge-${{ matrix.suffix }}.dmg"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-bridge-${{ matrix.suffix }}.dmg
+          path: print-bridge-${{ matrix.suffix }}.dmg
+
+  release:
+    needs: [build, mac-dmg]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -62,4 +146,6 @@ jobs:
             print-bridge-mac-amd64/print-bridge-mac-amd64
             print-bridge-windows-amd64.exe/print-bridge-windows-amd64.exe
             print-bridge-linux-amd64/print-bridge-linux-amd64
+            print-bridge-mac-arm64.dmg/print-bridge-mac-arm64.dmg
+            print-bridge-mac-amd64.dmg/print-bridge-mac-amd64.dmg
           generate_release_notes: true

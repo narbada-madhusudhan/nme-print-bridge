@@ -1,4 +1,4 @@
-// Print Bridge — Thermal Printer Service for Hotels
+// NME Print Bridge — Thermal Printer Service for Hotels
 // Single binary, zero dependencies. Download and run.
 //
 // Connects web-based POS systems to thermal printers via HTTP.
@@ -43,6 +43,17 @@ var RootPublicKeyB64 = "PYpHIvPZS5ynAaz2iUy0iD3FAiizQ1Wi0Ee7AUHb2Ho="
 
 // Default cert URL — override via config or CLI flag
 var DefaultCertURL = "https://printbridge.narbadatech.com/api/certs"
+
+// Built-in allowed origins — always allowed regardless of certificate.
+// These are baked in for production use before the central cert API is live.
+// Remove once cert system is fully deployed.
+var BuiltInAllowedOrigins = []string{
+	"https://godawariresort.com",
+	"http://godawariresort.com",
+	"https://admin.godawariresort.com",
+	"https://pos.godawariresort.com",
+	"https://www.godawariresort.com",
+}
 
 // ─── Certificate Types ─────────────────────────────────────────────────────
 
@@ -122,6 +133,11 @@ func NewCertManager(cfg Config) (*CertManager, error) {
 	cm.allowedOrigins["http://localhost:3000"] = true
 	cm.allowedOrigins["http://localhost:3001"] = true
 	cm.allowedOrigins["https://localhost:3000"] = true
+
+	// Built-in production origins (hardcoded for this version)
+	for _, origin := range BuiltInAllowedOrigins {
+		cm.allowedOrigins[origin] = true
+	}
 
 	return cm, nil
 }
@@ -215,6 +231,11 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 		"http://localhost:3001":  true,
 		"https://localhost:3000": true,
 	}
+	// Built-in origins always allowed
+	for _, origin := range BuiltInAllowedOrigins {
+		cm.allowedOrigins[origin] = true
+	}
+	// Certificate origins
 	for _, origin := range cert.Payload.AllowedOrigins {
 		cm.allowedOrigins[origin] = true
 	}
@@ -321,7 +342,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{
-		"name":     "Print Bridge",
+		"name":     "NME Print Bridge",
 		"version":  Version,
 		"platform": runtime.GOOS,
 		"arch":     runtime.GOARCH,
@@ -530,7 +551,7 @@ func printToUSB(printerName string, data []byte) error {
 
 // ─── Self-Update ───────────────────────────────────────────────────────────
 
-const GitHubRepo = "narbada-madhusudhan/print-bridge"
+const GitHubRepo = "narbada-madhusudhan/nme-print-bridge"
 
 type UpdateInfo struct {
 	Available      bool   `json:"available"`
@@ -727,7 +748,7 @@ func handleUpdateApply(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	writeJSON(w, 200, Response{Success: true, Message: "Updating... Print Bridge will restart."})
+	writeJSON(w, 200, Response{Success: true, Message: "Updating... NME Print Bridge will restart."})
 
 	// Apply update in background (response already sent)
 	go func() {
@@ -779,7 +800,7 @@ func uninstallAutoStart() error {
 func installMacLaunchAgent(exePath string) error {
 	home, _ := os.UserHomeDir()
 	plistDir := filepath.Join(home, "Library", "LaunchAgents")
-	plistPath := filepath.Join(plistDir, "com.narbada.print-bridge.plist")
+	plistPath := filepath.Join(plistDir, "com.nme.print-bridge.plist")
 
 	os.MkdirAll(plistDir, 0755)
 
@@ -788,7 +809,7 @@ func installMacLaunchAgent(exePath string) error {
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.narbada.print-bridge</string>
+    <string>com.nme.print-bridge</string>
     <key>ProgramArguments</key>
     <array>
         <string>%s</string>
@@ -814,7 +835,7 @@ func installMacLaunchAgent(exePath string) error {
 	}
 
 	fmt.Printf("  ✓ Auto-start installed (macOS LaunchAgent)\n")
-	fmt.Printf("  ✓ Print Bridge will start automatically on login\n")
+	fmt.Printf("  ✓ NME Print Bridge will start automatically on login\n")
 	fmt.Printf("  ✓ Logs: /tmp/print-bridge.log\n")
 	fmt.Printf("  ✓ Uninstall: %s --uninstall\n", exePath)
 	return nil
@@ -822,7 +843,7 @@ func installMacLaunchAgent(exePath string) error {
 
 func uninstallMacLaunchAgent() error {
 	home, _ := os.UserHomeDir()
-	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.narbada.print-bridge.plist")
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.nme.print-bridge.plist")
 	exec.Command("launchctl", "unload", plistPath).Run()
 	os.Remove(plistPath)
 	fmt.Println("  ✓ Auto-start removed")
@@ -834,7 +855,7 @@ func installWindowsStartup(exePath string) error {
 	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 
 	// Create a .bat file in Startup folder that runs the binary minimized
-	batPath := filepath.Join(startupDir, "Print Bridge.bat")
+	batPath := filepath.Join(startupDir, "NME Print Bridge.bat")
 	bat := fmt.Sprintf("@echo off\r\nstart /min \"\" \"%s\"\r\n", exePath)
 
 	if err := os.WriteFile(batPath, []byte(bat), 0644); err != nil {
@@ -842,14 +863,14 @@ func installWindowsStartup(exePath string) error {
 	}
 
 	fmt.Printf("  ✓ Auto-start installed (Windows Startup folder)\n")
-	fmt.Printf("  ✓ Print Bridge will start automatically on login\n")
+	fmt.Printf("  ✓ NME Print Bridge will start automatically on login\n")
 	fmt.Printf("  ✓ Uninstall: %s --uninstall\n", exePath)
 	return nil
 }
 
 func uninstallWindowsStartup() error {
 	home, _ := os.UserHomeDir()
-	batPath := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "Print Bridge.bat")
+	batPath := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "NME Print Bridge.bat")
 	os.Remove(batPath)
 	fmt.Println("  ✓ Auto-start removed")
 	return nil
@@ -863,7 +884,7 @@ func installLinuxSystemd(exePath string) error {
 	os.MkdirAll(serviceDir, 0755)
 
 	service := fmt.Sprintf(`[Unit]
-Description=Print Bridge — Thermal Printer Service
+Description=NME Print Bridge — Thermal Printer Service
 After=network.target
 
 [Service]
@@ -886,7 +907,7 @@ WantedBy=default.target
 	}
 
 	fmt.Printf("  ✓ Auto-start installed (systemd user service)\n")
-	fmt.Printf("  ✓ Print Bridge will start automatically on login\n")
+	fmt.Printf("  ✓ NME Print Bridge will start automatically on login\n")
 	fmt.Printf("  ✓ Uninstall: %s --uninstall\n", exePath)
 	return nil
 }
@@ -968,7 +989,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("  ╔═══════════════════════════════════════╗")
-	fmt.Printf("  ║   Print Bridge v%-22s║\n", Version)
+	fmt.Printf("  ║   NME Print Bridge v%-22s║\n", Version)
 	fmt.Printf("  ║   http://%-28s║\n", addr)
 	fmt.Println("  ╠═══════════════════════════════════════╣")
 	fmt.Println("  ║  GET  /              Status            ║")
