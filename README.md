@@ -4,26 +4,29 @@ Lightweight thermal printer bridge for web-based POS systems. Single binary, zer
 
 Connects web browsers to thermal printers via a localhost HTTP API. Supports network printers (TCP/ESC-POS) and USB/OS printers.
 
-## Download
+## Install (One Command)
+
+### macOS / Linux
+```bash
+curl -sL https://raw.githubusercontent.com/narbada-madhusudhan/nme-print-bridge/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+```powershell
+irm https://raw.githubusercontent.com/narbada-madhusudhan/nme-print-bridge/main/install.ps1 | iex
+```
+
+That's it. Downloads, installs, auto-starts on login.
+
+### Manual Download
 
 | Platform | Download |
 |----------|----------|
 | **Windows** | [print-bridge-windows-amd64.exe](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-windows-amd64.exe) |
 | **macOS (Apple Silicon)** | [print-bridge-mac-arm64](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-mac-arm64) |
 | **macOS (Intel)** | [print-bridge-mac-amd64](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-mac-amd64) |
-
-## Quick Start
-
-### Windows
-1. Download `print-bridge-windows-amd64.exe`
-2. Double-click to run
-3. Done — NME Print Bridge is running on `http://localhost:9120`
-
-### macOS
-```bash
-chmod +x print-bridge-mac-arm64
-./print-bridge-mac-arm64
-```
+| **macOS DMG** | [nme-print-bridge-mac-arm64.dmg](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/nme-print-bridge-mac-arm64.dmg) |
+| **Linux** | [print-bridge-linux-amd64](https://github.com/narbada-madhusudhan/nme-print-bridge/releases/latest/download/print-bridge-linux-amd64) |
 
 ### Configure for your hotel
 ```bash
