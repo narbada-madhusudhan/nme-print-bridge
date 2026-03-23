@@ -15,6 +15,7 @@
 package main
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -472,38 +473,83 @@ func listPrinters() ([]PrinterInfo, error) {
 	}
 }
 
+// probeUSBPrinter sends DLE EOT status command to check if printer is responsive.
+// Returns true if the printer responds within timeout.
+func probeUSBPrinter(printerName string) bool {
+	// DLE EOT 1 = query printer status (real-time, bypasses print queue)
+	statusCmd := []byte{0x10, 0x04, 0x01}
+
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("probe-%d.raw", time.Now().UnixNano()))
+	if err := os.WriteFile(tmpFile, statusCmd, 0644); err != nil {
+		return false
+	}
+	defer os.Remove(tmpFile)
+
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		// Use lp with short timeout — if printer is off, lp will hang or error
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "lp", "-d", printerName, "-o", "raw", tmpFile)
+		err := cmd.Run()
+		if ctx.Err() == context.DeadlineExceeded {
+			return false // timed out = printer not responding
+		}
+		return err == nil
+	case "windows":
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "cmd", "/c", fmt.Sprintf(`copy /b "%s" "\\localhost\%s"`, tmpFile, printerName))
+		err := cmd.Run()
+		if ctx.Err() == context.DeadlineExceeded {
+			return false
+		}
+		return err == nil
+	}
+	return false
+}
+
 func listPrintersUnix() ([]PrinterInfo, error) {
+	// Use lpstat -p for printer list — each printer may span multiple lines
 	out, err := exec.Command("lpstat", "-p").CombinedOutput()
 	if err != nil {
 		return []PrinterInfo{}, nil
 	}
 
-	// Also get USB devices to check physical connection
-	usbDevices := getConnectedUSBPrinters()
-
-	var printers []PrinterInfo
+	// Send DLE EOT probe to USB printers to trigger CUPS offline detection
+	// (CUPS only discovers offline state when a job is attempted)
 	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "printer ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 && !isNetworkPrinter(parts[1]) {
+				go probeUSBPrinter(parts[1])
+			}
+		}
+	}
+
+	// Brief pause to let CUPS update status after probe
+	time.Sleep(500 * time.Millisecond)
+
+	// Re-read status after probe
+	out, err = exec.Command("lpstat", "-p").CombinedOutput()
+	if err != nil {
+		return []PrinterInfo{}, nil
+	}
+
+	fullOutput := string(out)
+	var printers []PrinterInfo
+	for _, line := range strings.Split(fullOutput, "\n") {
 		if strings.HasPrefix(line, "printer ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
 				name := parts[1]
-				// "enabled" from lpstat just means the driver is installed
-				// Check if actually reachable: not disabled, and if USB, physically connected
 				enabled := strings.Contains(line, "enabled") && !strings.Contains(line, "disabled")
-				// If we have USB device info, check physical connection
-				if len(usbDevices) > 0 {
-					_, isUSBConnected := usbDevices[name]
-					if !isUSBConnected {
-						// Check with normalized name (replace spaces/dashes with underscores)
-						for usbName := range usbDevices {
-							if normalizePN(usbName) == normalizePN(name) {
-								isUSBConnected = true
-								break
-							}
-						}
-					}
-					// If it's a USB printer and not physically connected, mark offline
-					if !isUSBConnected && !isNetworkPrinter(name) {
+				// Check for offline indicators in the lpstat output
+				if strings.Contains(fullOutput, name) &&
+					(strings.Contains(fullOutput, "offline") || strings.Contains(fullOutput, "not responding")) {
+					// Check if the offline message is for THIS printer
+					printerSection := extractPrinterSection(fullOutput, name)
+					if strings.Contains(printerSection, "offline") || strings.Contains(printerSection, "not responding") {
 						enabled = false
 					}
 				}
@@ -512,6 +558,24 @@ func listPrintersUnix() ([]PrinterInfo, error) {
 		}
 	}
 	return printers, nil
+}
+
+// extractPrinterSection gets all lpstat output lines related to a specific printer
+func extractPrinterSection(output, printerName string) string {
+	var section strings.Builder
+	inSection := false
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "printer "+printerName+" ") {
+			inSection = true
+		} else if strings.HasPrefix(line, "printer ") {
+			inSection = false
+		}
+		if inSection {
+			section.WriteString(line)
+			section.WriteString("\n")
+		}
+	}
+	return section.String()
 }
 
 func normalizePN(name string) string {
@@ -524,29 +588,43 @@ func isNetworkPrinter(name string) bool {
 }
 
 // getConnectedUSBPrinters returns currently connected USB printer names
+// Uses lpinfo -v on macOS/Linux (lists physically available devices)
+// Uses Get-Printer on Windows (PrinterStatus reflects actual state)
 func getConnectedUSBPrinters() map[string]bool {
-	if runtime.GOOS == "darwin" {
-		return getConnectedUSBPrintersMac()
-	}
-	return map[string]bool{}
-}
-
-func getConnectedUSBPrintersMac() map[string]bool {
-	// Use system_profiler to check physically connected USB devices
-	out, err := exec.Command("system_profiler", "SPUSBDataType", "-detailLevel", "mini").CombinedOutput()
-	if err != nil {
-		return map[string]bool{}
-	}
 	devices := map[string]bool{}
-	for _, line := range strings.Split(string(out), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(trimmed, "USB") {
-			name := strings.TrimSuffix(trimmed, ":")
-			devices[name] = true
-			// Also store normalized version
-			devices[normalizePN(name)] = true
+
+	switch runtime.GOOS {
+	case "darwin", "linux":
+		// lpinfo -v lists currently available (physically connected) devices
+		out, err := exec.Command("lpinfo", "-v").CombinedOutput()
+		if err != nil {
+			return devices
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			// Lines look like: direct usb://Printer/POS-80C?serial=012345678AB
+			if strings.Contains(line, "usb://") {
+				// Extract printer name from USB URI
+				parts := strings.SplitN(line, "usb://", 2)
+				if len(parts) == 2 {
+					uri := parts[1]
+					// URI format: Manufacturer/Model?serial=...
+					if idx := strings.Index(uri, "?"); idx > 0 {
+						uri = uri[:idx]
+					}
+					// Store both raw and normalized
+					devices[uri] = true
+					devices[normalizePN(uri)] = true
+					// Also store just the model part
+					uriParts := strings.SplitN(uri, "/", 2)
+					if len(uriParts) == 2 {
+						devices[uriParts[1]] = true
+						devices[normalizePN(uriParts[1])] = true
+					}
+				}
+			}
 		}
 	}
+
 	return devices
 }
 
