@@ -7,6 +7,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -53,7 +56,6 @@ jobs:
           name: print-bridge-${{ matrix.suffix }}
           path: print-bridge-${{ matrix.suffix }}
 
-  # Build macOS .app bundle + DMG
   mac-dmg:
     runs-on: macos-latest
     needs: build
@@ -79,17 +81,14 @@ jobs:
           mkdir -p "${APP_NAME}/Contents/MacOS"
           mkdir -p "${APP_NAME}/Contents/Resources"
 
-          # Copy binary (download-artifact puts file in bin/ dir)
           cp bin/print-bridge-${{ matrix.suffix }} "${APP_NAME}/Contents/MacOS/print-bridge"
           chmod +x "${APP_NAME}/Contents/MacOS/print-bridge"
 
-          # Copy icon
           if [ -f assets/app-icon.icns ]; then
             cp assets/app-icon.icns "${APP_NAME}/Contents/Resources/AppIcon.icns"
           fi
 
-          # Info.plist
-          cat > "${APP_NAME}/Contents/Info.plist" << 'PLIST'
+          cat > "${APP_NAME}/Contents/Info.plist" << PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -114,7 +113,6 @@ jobs:
           </plist>
           PLIST
 
-          # Create wrapper script that runs with --install on first launch
           mv "${APP_NAME}/Contents/MacOS/print-bridge" "${APP_NAME}/Contents/MacOS/print-bridge-bin"
           cat > "${APP_NAME}/Contents/MacOS/print-bridge" << 'LAUNCHER'
           #!/bin/bash
