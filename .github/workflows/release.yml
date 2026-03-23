@@ -70,15 +70,22 @@ jobs:
         with:
           name: print-bridge-${{ matrix.suffix }}
 
+      - uses: actions/checkout@v4
+
       - name: Create .app bundle
         run: |
-          APP_NAME="Print Bridge.app"
+          APP_NAME="NME Print Bridge.app"
           mkdir -p "${APP_NAME}/Contents/MacOS"
           mkdir -p "${APP_NAME}/Contents/Resources"
 
           # Copy binary
           cp print-bridge-${{ matrix.suffix }} "${APP_NAME}/Contents/MacOS/print-bridge"
           chmod +x "${APP_NAME}/Contents/MacOS/print-bridge"
+
+          # Copy icon
+          if [ -f assets/app-icon.icns ]; then
+            cp assets/app-icon.icns "${APP_NAME}/Contents/Resources/AppIcon.icns"
+          fi
 
           # Info.plist
           cat > "${APP_NAME}/Contents/Info.plist" << 'PLIST'
@@ -87,9 +94,11 @@ jobs:
           <plist version="1.0">
           <dict>
               <key>CFBundleName</key>
-              <string>Print Bridge</string>
+              <string>NME Print Bridge</string>
               <key>CFBundleIdentifier</key>
-              <string>com.narbada.print-bridge</string>
+              <string>com.nme.print-bridge</string>
+              <key>CFBundleIconFile</key>
+              <string>AppIcon</string>
               <key>CFBundleVersion</key>
               <string>${{ github.ref_name }}</string>
               <key>CFBundleShortVersionString</key>
@@ -120,16 +129,16 @@ jobs:
       - name: Create DMG
         run: |
           mkdir dmg-contents
-          cp -r "Print Bridge.app" dmg-contents/
+          cp -r "NME Print Bridge.app" dmg-contents/
           ln -s /Applications dmg-contents/Applications
-          hdiutil create -volname "Print Bridge" -srcfolder dmg-contents -ov -format UDZO \
-            "print-bridge-${{ matrix.suffix }}.dmg"
+          hdiutil create -volname "NME Print Bridge" -srcfolder dmg-contents -ov -format UDZO \
+            "nme-print-bridge-${{ matrix.suffix }}.dmg"
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: print-bridge-${{ matrix.suffix }}.dmg
-          path: print-bridge-${{ matrix.suffix }}.dmg
+          name: nme-print-bridge-${{ matrix.suffix }}.dmg
+          path: nme-print-bridge-${{ matrix.suffix }}.dmg
 
   release:
     needs: [build, mac-dmg]
@@ -146,6 +155,6 @@ jobs:
             print-bridge-mac-amd64/print-bridge-mac-amd64
             print-bridge-windows-amd64.exe/print-bridge-windows-amd64.exe
             print-bridge-linux-amd64/print-bridge-linux-amd64
-            print-bridge-mac-arm64.dmg/print-bridge-mac-arm64.dmg
-            print-bridge-mac-amd64.dmg/print-bridge-mac-amd64.dmg
+            nme-print-bridge-mac-arm64.dmg/nme-print-bridge-mac-arm64.dmg
+            nme-print-bridge-mac-amd64.dmg/nme-print-bridge-mac-amd64.dmg
           generate_release_notes: true

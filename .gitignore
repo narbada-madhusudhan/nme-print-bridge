@@ -4,3 +4,4 @@ print-bridge-mac-*
 print-bridge-windows*
 root-private.key
 cert-cache.json
+.DS_Store
