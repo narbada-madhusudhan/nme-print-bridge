@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -840,9 +841,9 @@ func performUpdate(downloadURL string) error {
 	}
 	os.Remove(backupPath)
 
-	log.Printf("[update] Updated successfully. Restart to use new version.")
+	log.Printf("[update] Binary replaced successfully. Restarting...")
 
-	// Restart: exec the new binary (replaces current process)
+	// Restart: exec the new binary (replaces current process on Unix, starts new + exits on Windows)
 	execErr := syscallExec(exePath)
 	if execErr != nil {
 		log.Printf("[update] Auto-restart failed: %v — please restart manually", execErr)
@@ -850,20 +851,22 @@ func performUpdate(downloadURL string) error {
 	return nil
 }
 
-// syscallExec replaces the current process with a new one (Unix only)
-// On Windows, we just exit and let the auto-start mechanism restart us
+// syscallExec replaces the current process with a new one.
+// Unix: uses syscall.Exec to replace in-place (PID preserved for service managers).
+// Windows: starts a new process and exits (service manager restarts).
 func syscallExec(path string) error {
 	if runtime.GOOS == "windows" {
-		// Windows: start new process and exit
 		cmd := exec.Command(path)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		cmd.Start()
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start new process: %w", err)
+		}
 		os.Exit(0)
 		return nil
 	}
-	// Unix: replace current process
-	return fmt.Errorf("please restart print-bridge to use the new version")
+	// Unix: replace current process in-place
+	return syscall.Exec(path, []string{path}, os.Environ())
 }
 
 // GET /update/check — check for updates
@@ -1144,12 +1147,21 @@ func main() {
 		fmt.Printf("  Hotel: %s\n", cfg.HotelID)
 	}
 
-	// Check for updates in background on startup
+	// Auto-update on startup: check and apply silently
 	go func() {
+		// Wait for server to start before checking (so health checks pass during the window)
+		time.Sleep(3 * time.Second)
 		info, err := checkForUpdate()
-		if err == nil && info.Available {
-			fmt.Printf("\n  ⬆ Update available: %s → %s\n", info.CurrentVersion, info.LatestVersion)
-			fmt.Printf("  ⬆ Download: %s\n\n", info.ReleaseURL)
+		if err != nil || !info.Available {
+			return
+		}
+		if info.DownloadURL == "" {
+			log.Printf("[update] Update %s available but no download URL for this platform", info.LatestVersion)
+			return
+		}
+		log.Printf("[update] Auto-updating: %s → %s", info.CurrentVersion, info.LatestVersion)
+		if err := performUpdate(info.DownloadURL); err != nil {
+			log.Printf("[update] Auto-update failed: %v", err)
 		}
 	}()
 
