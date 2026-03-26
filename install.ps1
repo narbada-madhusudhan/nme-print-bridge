@@ -8,16 +8,35 @@ $ExePath = "$InstallDir\nme-print-bridge.exe"
 $Binary = "print-bridge-windows-amd64.exe"
 $URL = "https://github.com/$Repo/releases/latest/download/$Binary"
 
+# Helper: kill all running instances of the bridge
+function Stop-Bridge {
+    # Try multiple ways — GUI-mode processes don't always show by name
+    Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
+    taskkill /F /IM "nme-print-bridge.exe" 2>$null | Out-Null
+    # Also kill by path in case the process name is mangled
+    Get-Process | Where-Object { $_.Path -like "*nme-print-bridge*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+# Helper: remove the exe, with rename fallback if locked
+function Remove-Bridge {
+    Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
+    if (Test-Path $ExePath) {
+        # File still locked — rename it so we can download fresh; Windows will clean up on reboot
+        $OldPath = "$ExePath.old"
+        Remove-Item $OldPath -Force -ErrorAction SilentlyContinue
+        Rename-Item $ExePath $OldPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Handle --uninstall
 if ($args -contains "--uninstall" -or $args -contains "uninstall") {
     Write-Host "`n  Uninstalling NME Print Bridge..."
-    Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+    Stop-Bridge
     if (Test-Path $ExePath) {
         & $ExePath --uninstall 2>$null
-        Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
-        Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
+        Stop-Bridge
+        Remove-Bridge
         Write-Host "  OK Uninstalled" -ForegroundColor Green
     } else {
         Write-Host "  Not installed at $ExePath"
@@ -34,17 +53,18 @@ Write-Host ""
 # Stop existing if upgrading
 if (Test-Path $ExePath) {
     Write-Host "  -> Stopping existing installation..."
-    Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
+    Stop-Bridge
     & $ExePath --uninstall 2>$null
-    Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    Remove-Item $ExePath -Force -ErrorAction SilentlyContinue
-    if (Test-Path $ExePath) {
+    Stop-Bridge
+    Remove-Bridge
+    if ((Test-Path $ExePath) -and -not (Test-Path "$ExePath.old")) {
         Write-Host "  X Could not remove old binary. Close any running instances and retry." -ForegroundColor Red
         exit 1
     }
 }
+
+# Clean up old renamed binary
+Remove-Item "$ExePath.old" -Force -ErrorAction SilentlyContinue
 
 # Download
 Write-Host "  -> Downloading latest release..."
