@@ -86,19 +86,9 @@ function Install-PrintBridge {
         Write-Host "  ! Auto-start setup failed: $_" -ForegroundColor Yellow
     }
 
-    # Start the bridge completely hidden
+    # Start the bridge in background
     Write-Host "  -> Starting bridge..."
-    try {
-        # Preferred: VBS launcher — truly zero window flash
-        $VbsLauncher = "$InstallDir\launch.vbs"
-        Set-Content -Path $VbsLauncher -Value "CreateObject(""Wscript.Shell"").Run """"""$ExePath"""""", 0, False"
-        & wscript.exe "`"$VbsLauncher`""
-        Start-Sleep -Milliseconds 500
-        Remove-Item $VbsLauncher -Force -ErrorAction SilentlyContinue
-    } catch {
-        # Fallback: Start-Process (may briefly flash on some Windows Terminal configs)
-        Start-Process -FilePath $ExePath -WindowStyle Hidden
-    }
+    Start-Process -FilePath $ExePath -WindowStyle Hidden
 
     # Verify the bridge is actually running
     Write-Host "  -> Verifying bridge is running..."
