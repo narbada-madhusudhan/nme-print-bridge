@@ -116,6 +116,15 @@ function Install-PrintBridge {
         } catch {}
     }
 
+    # If not running, check log file for crash reason
+    $LogFile = "$env:USERPROFILE\.printbridge\bridge.log"
+    $CrashReason = ""
+    if (-not $Running) {
+        if (Test-Path $LogFile) {
+            $CrashReason = Get-Content $LogFile -Tail 10 -ErrorAction SilentlyContinue | Out-String
+        }
+    }
+
     Write-Host ""
     if ($Running) {
         Write-Host "  =======================================" -ForegroundColor Green
@@ -138,10 +147,15 @@ function Install-PrintBridge {
         Write-Host "  Try running manually to see errors:    "
         Write-Host "  & '$ExePath'                           "
         Write-Host "                                         "
-        Write-Host "  Common fixes:                          "
-        Write-Host "  - Allow through Windows Firewall       "
-        Write-Host "  - Allow in Windows Defender/antivirus  "
-        Write-Host "  - Run PowerShell as Administrator      "
+        if ($CrashReason) {
+            Write-Host "  Log output ($LogFile):" -ForegroundColor Yellow
+            Write-Host $CrashReason -ForegroundColor Gray
+        } else {
+            Write-Host "  Common fixes:                          "
+            Write-Host "  - Allow through Windows Firewall       "
+            Write-Host "  - Allow in Windows Defender/antivirus  "
+            Write-Host "  - Run PowerShell as Administrator      "
+        }
         Write-Host "  =======================================" -ForegroundColor Yellow
     }
     Write-Host ""

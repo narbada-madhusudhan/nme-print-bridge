@@ -1121,6 +1121,19 @@ func uninstallLinuxSystemd() error {
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 func main() {
+	// On Windows (-H windowsgui), stdout/stderr go nowhere.
+	// Write logs to a file so errors are diagnosable.
+	if runtime.GOOS == "windows" {
+		os.MkdirAll(configDir(), 0755)
+		logPath := filepath.Join(configDir(), "bridge.log")
+		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
+			log.SetOutput(logFile)
+			// Also redirect fmt.Print/Println to log file via os.Stdout
+			os.Stdout = logFile
+			os.Stderr = logFile
+		}
+	}
+
 	hotelID := flag.String("hotel-id", "", "Hotel ID for certificate lookup")
 	certURL := flag.String("cert-url", "", "Certificate API URL")
 	install := flag.Bool("install", false, "Install auto-start (runs on login)")
