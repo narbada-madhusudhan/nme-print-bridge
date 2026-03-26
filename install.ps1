@@ -92,7 +92,8 @@ function Install-PrintBridge {
         # Preferred: VBS launcher — truly zero window flash
         $VbsLauncher = "$InstallDir\launch.vbs"
         Set-Content -Path $VbsLauncher -Value "CreateObject(""Wscript.Shell"").Run """"""$ExePath"""""", 0, False"
-        wscript.exe $VbsLauncher
+        & wscript.exe "`"$VbsLauncher`""
+        Start-Sleep -Milliseconds 500
         Remove-Item $VbsLauncher -Force -ErrorAction SilentlyContinue
     } catch {
         # Fallback: Start-Process (may briefly flash on some Windows Terminal configs)
