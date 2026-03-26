@@ -10,11 +10,14 @@ $URL = "https://github.com/$Repo/releases/latest/download/$Binary"
 
 # Helper: kill all running instances of the bridge
 function Stop-Bridge {
+    $OldPref = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
     # Try multiple ways — GUI-mode processes don't always show by name
-    Stop-Process -Name "nme-print-bridge" -Force -ErrorAction SilentlyContinue
-    taskkill /F /IM "nme-print-bridge.exe" 2>$null | Out-Null
+    Stop-Process -Name "nme-print-bridge" -Force 2>$null
+    cmd /c "taskkill /F /IM nme-print-bridge.exe >nul 2>&1"
     # Also kill by path in case the process name is mangled
-    Get-Process | Where-Object { $_.Path -like "*nme-print-bridge*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process | Where-Object { $_.Path -like "*nme-print-bridge*" } | Stop-Process -Force 2>$null
+    $ErrorActionPreference = $OldPref
     Start-Sleep -Seconds 1
 }
 
