@@ -63,6 +63,8 @@ Write-Host "  OK Downloaded to $ExePath" -ForegroundColor Green
 # Install auto-start and start the service
 Write-Host "  -> Setting up auto-start..."
 & $ExePath --install
+Write-Host "  -> Starting bridge..."
+Start-Process -FilePath $ExePath -WindowStyle Hidden
 
 # Verify the bridge is actually running
 Write-Host "  -> Verifying bridge is running..."
