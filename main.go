@@ -683,10 +683,76 @@ func printToUSB(printerName string, data []byte) error {
 			return fmt.Errorf("lp error: %s — %s", err, string(out))
 		}
 	case "windows":
+		// Try copy /b to shared printer first (works if printer is shared)
 		cmd := exec.Command("cmd", "/c", fmt.Sprintf(`copy /b "%s" "\\localhost\%s"`, tmpFile, printerName))
 		if err := cmd.Run(); err != nil {
-			ps := exec.Command("powershell", "-Command",
-				fmt.Sprintf(`Get-Content '%s' -Encoding Byte -ReadCount 0 | Out-Printer '%s'`, tmpFile, printerName))
+			// Fallback: use .NET raw printing API to send bytes directly
+			// Out-Printer converts bytes to text — we must use RawPrinterHelper instead
+			psScript := fmt.Sprintf(`
+$PrinterName = '%s'
+$FilePath = '%s'
+$bytes = [System.IO.File]::ReadAllBytes($FilePath)
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public class RawPrinterHelper {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct DOCINFOW {
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDatatype;
+    }
+
+    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+
+    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, ref DOCINFOW pDocInfo);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+
+    [DllImport("winspool.drv", SetLastError = true)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+
+    public static bool SendBytesToPrinter(string printerName, byte[] data) {
+        IntPtr hPrinter;
+        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;
+
+        var docInfo = new DOCINFOW { pDocName = "NME Print", pDatatype = "RAW" };
+        if (!StartDocPrinter(hPrinter, 1, ref docInfo)) { ClosePrinter(hPrinter); return false; }
+        if (!StartPagePrinter(hPrinter)) { EndDocPrinter(hPrinter); ClosePrinter(hPrinter); return false; }
+
+        IntPtr pBytes = Marshal.AllocHGlobal(data.Length);
+        Marshal.Copy(data, 0, pBytes, data.Length);
+        int written;
+        bool ok = WritePrinter(hPrinter, pBytes, data.Length, out written);
+        Marshal.FreeHGlobal(pBytes);
+
+        EndPagePrinter(hPrinter);
+        EndDocPrinter(hPrinter);
+        ClosePrinter(hPrinter);
+        return ok && written == data.Length;
+    }
+}
+'@
+
+if (-not [RawPrinterHelper]::SendBytesToPrinter($PrinterName, $bytes)) {
+    throw "Failed to send raw data to printer '$PrinterName'"
+}
+`, printerName, tmpFile)
+			ps := exec.Command("powershell", "-NoProfile", "-Command", psScript)
 			if out, err := ps.CombinedOutput(); err != nil {
 				return fmt.Errorf("print error: %s — %s", err, string(out))
 			}
