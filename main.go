@@ -67,6 +67,10 @@ func main() {
 
 	hotelID := flag.String("hotel-id", "", "Hotel ID for certificate lookup")
 	certURL := flag.String("cert-url", "", "Certificate API URL")
+	adminAPIURL := flag.String("admin-api-url", "", "Admin API URL for print job polling")
+	branchID := flag.String("branch-id", "", "Restaurant branch ID for print job polling")
+	serviceKey := flag.String("service-key", "", "Service key for admin API authentication")
+	poll := flag.Bool("poll", false, "Enable background print job polling")
 	install := flag.Bool("install", false, "Install auto-start (runs on login)")
 	uninstall := flag.Bool("uninstall", false, "Remove auto-start")
 	flag.Parse()
@@ -96,6 +100,18 @@ func main() {
 	}
 	if *certURL != "" {
 		cfg.CertURL = *certURL
+	}
+	if *adminAPIURL != "" {
+		cfg.AdminAPIURL = *adminAPIURL
+	}
+	if *branchID != "" {
+		cfg.RestaurantBranchID = *branchID
+	}
+	if *serviceKey != "" {
+		cfg.ServiceKey = *serviceKey
+	}
+	if *poll {
+		cfg.PollEnabled = true
 	}
 	saveConfig(cfg)
 
@@ -144,6 +160,17 @@ func main() {
 		fmt.Printf("  Hotel: %s\n", cfg.HotelID)
 	}
 
+	// Start background print job poller (activePoller is read by status handler)
+	var poller *Poller
+	if cfg.PollEnabled && cfg.AdminAPIURL != "" && cfg.RestaurantBranchID != "" {
+		poller = NewPoller(cfg)
+		activePoller = poller
+		poller.Start()
+		fmt.Printf("  Poller: ON (every %ds → %s)\n", cfg.PollIntervalSeconds, cfg.AdminAPIURL)
+		log.Printf("[poller] Started — polling %s every %ds for branch %s",
+			cfg.AdminAPIURL, cfg.PollIntervalSeconds, cfg.RestaurantBranchID)
+	}
+
 	// Auto-update on startup
 	go func() {
 		time.Sleep(3 * time.Second)
@@ -175,6 +202,10 @@ func main() {
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 		<-sigCh
 		log.Println("[server] Shutting down gracefully...")
+		if poller != nil {
+			poller.Stop()
+			log.Println("[poller] Stopped")
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(ShutdownTimeout)*time.Second)
 		defer cancel()
 		srv.Shutdown(ctx)

@@ -12,14 +12,34 @@ import (
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
+// activePoller is set by main when polling is enabled, read by status handler.
+var activePoller *Poller
+
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, map[string]any{
+	status := map[string]any{
 		"name":     AppName,
 		"version":  Version,
 		"platform": runtime.GOOS,
 		"arch":     runtime.GOARCH,
 		"status":   "running",
-	})
+	}
+
+	if activePoller != nil {
+		processed, lastPoll := activePoller.Stats()
+		pollerInfo := map[string]any{
+			"enabled":        true,
+			"admin_api":      activePoller.config.AdminAPIURL,
+			"branch_id":      activePoller.config.RestaurantBranchID,
+			"interval":       activePoller.config.PollIntervalSeconds,
+			"jobs_processed": processed,
+		}
+		if !lastPoll.IsZero() {
+			pollerInfo["last_poll"] = lastPoll.Format(time.RFC3339)
+		}
+		status["poller"] = pollerInfo
+	}
+
+	writeJSON(w, 200, status)
 }
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {

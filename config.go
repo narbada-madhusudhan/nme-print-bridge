@@ -10,8 +10,13 @@ import (
 // ─── Config ────────────────────────────────────────────────────────────────
 
 type Config struct {
-	HotelID string `json:"hotel_id"`
-	CertURL string `json:"cert_url"`
+	HotelID             string `json:"hotel_id"`
+	CertURL             string `json:"cert_url"`
+	AdminAPIURL         string `json:"admin_api_url"`
+	RestaurantBranchID  string `json:"restaurant_branch_id"`
+	ServiceKey          string `json:"service_key,omitempty"`
+	PollEnabled         bool   `json:"poll_enabled"`
+	PollIntervalSeconds int    `json:"poll_interval_seconds"`
 }
 
 func configDir() string {
@@ -34,6 +39,9 @@ func loadConfig() Config {
 	}
 	if cfg.CertURL == "" {
 		cfg.CertURL = DefaultCertURL
+	}
+	if cfg.PollIntervalSeconds < MinPollInterval {
+		cfg.PollIntervalSeconds = DefaultPollInterval
 	}
 	return cfg
 }

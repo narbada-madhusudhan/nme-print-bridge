@@ -44,6 +44,17 @@ const (
 	CertRefreshHours       = 24
 )
 
+// ─── Print Job Polling ─────────────────────────────────────────────────────
+
+const (
+	DefaultPollInterval      = 5   // seconds
+	MinPollInterval          = 2   // seconds
+	MaxPollInterval          = 60  // seconds
+	PollClaimTimeout         = 10  // seconds
+	PollStatusUpdateTimeout  = 5   // seconds
+	UnreachableTimeoutSec    = 120 // seconds — matches browser usePrintJobConsumer
+)
+
 // ─── Paths & Labels ────────────────────────────────────────────────────────
 
 const (
