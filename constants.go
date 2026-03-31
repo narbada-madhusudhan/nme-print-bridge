@@ -55,6 +55,15 @@ const (
 	UnreachableTimeoutSec    = 120 // seconds — matches browser usePrintJobConsumer
 )
 
+// ─── Print Job Statuses ────────────────────────────────────────────────────
+
+const (
+	JobStatusPending     = "PENDING"
+	JobStatusCompleted   = "COMPLETED"
+	JobStatusFailed      = "FAILED"
+	JobStatusUnreachable = "UNREACHABLE"
+)
+
 // ─── Paths & Labels ────────────────────────────────────────────────────────
 
 const (

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 )
 
@@ -51,7 +52,9 @@ func contentToEscPos(raw json.RawMessage) []byte {
 
 	var lines []printContentLine
 	if linesRaw, ok := content["lines"]; ok {
-		json.Unmarshal(linesRaw, &lines)
+		if err := json.Unmarshal(linesRaw, &lines); err != nil {
+			log.Printf("[escpos] Failed to parse lines: %v", err)
+		}
 	}
 
 	var out []string

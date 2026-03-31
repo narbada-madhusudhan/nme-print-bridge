@@ -2,13 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net"
 	"net/http"
-	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -134,13 +132,8 @@ func (p *Poller) claimJobs() ([]claimedJob, error) {
 		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
 	}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
 	var result claimResponse
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("invalid response: %w", err)
 	}
 
@@ -179,11 +172,11 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	if printerName != "" && len(reachable) > 0 && !reachable[printerName] {
 		jobAge := p.jobAge(job)
 		if jobAge >= time.Duration(UnreachableTimeoutSec)*time.Second {
-			p.updateStatus(job.ID, "UNREACHABLE", "Printer unreachable — no hub connected")
+			p.updateStatus(job.ID, JobStatusUnreachable, "Printer unreachable — no hub connected")
 			log.Printf("[poller] Job %s: printer %q unreachable (age %s), marked UNREACHABLE", job.ID, printerName, jobAge)
 		} else {
 			// Release back to PENDING for another hub
-			p.updateStatus(job.ID, "PENDING", "")
+			p.updateStatus(job.ID, JobStatusPending, "")
 		}
 		return
 	}
@@ -196,41 +189,24 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	if printerName != "" {
 		printErr = printToUSB(printerName, escposData)
 	} else if job.Printer != nil && job.Printer.IPAddress != "" {
-		printErr = p.printNetwork(job.Printer.IPAddress, job.Printer.Port, escposData)
+		printErr = tcpSend(job.Printer.IPAddress, job.Printer.Port, escposData)
 	} else {
 		printErr = fmt.Errorf("no printer configured for job")
 	}
 
 	if printErr != nil {
-		p.updateStatus(job.ID, "FAILED", printErr.Error())
+		p.updateStatus(job.ID, JobStatusFailed, printErr.Error())
 		log.Printf("[poller] Job %s: print failed: %v", job.ID, printErr)
 		return
 	}
 
-	p.updateStatus(job.ID, "COMPLETED", "")
+	p.updateStatus(job.ID, JobStatusCompleted, "")
 	p.jobsProcessed.Add(1)
 	target := printerName
 	if target == "" && job.Printer != nil {
 		target = job.Printer.IPAddress
 	}
 	log.Printf("[poller] Job %s: printed to %s", job.ID, target)
-}
-
-func (p *Poller) printNetwork(ip string, port int, data []byte) error {
-	if port == 0 {
-		port = DefaultPrinterPort
-	}
-	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	conn, err := net.DialTimeout("tcp", addr, time.Duration(NetworkDialTimeout)*time.Second)
-	if err != nil {
-		return fmt.Errorf("connect %s: %w", addr, err)
-	}
-	defer conn.Close()
-	conn.SetWriteDeadline(time.Now().Add(time.Duration(NetworkWriteTimeout) * time.Second))
-	if _, err := conn.Write(data); err != nil {
-		return fmt.Errorf("write %s: %w", addr, err)
-	}
-	return nil
 }
 
 func (p *Poller) updateStatus(jobID, status, errMsg string) {
@@ -242,7 +218,10 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest("PATCH", url, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(PollStatusUpdateTimeout)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[poller] Status update request failed: %v", err)
 		return
@@ -252,8 +231,7 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 		req.Header.Set("X-Bridge-Key", p.config.ServiceKey)
 	}
 
-	client := &http.Client{Timeout: time.Duration(PollStatusUpdateTimeout) * time.Second}
-	resp, err := client.Do(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
 		log.Printf("[poller] Status update for %s failed: %v", jobID, err)
 		return

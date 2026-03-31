@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"time"
 )
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-// activePoller is set by main when polling is enabled, read by status handler.
-var activePoller *Poller
+// activePollerPtr is set by main before the server starts, read by status handler.
+var activePollerPtr atomic.Pointer[Poller]
 
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	status := map[string]any{
@@ -24,12 +25,12 @@ func handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"status":   "running",
 	}
 
-	if activePoller != nil {
-		processed, lastPoll := activePoller.Stats()
+	if p := activePollerPtr.Load(); p != nil {
+		processed, lastPoll := p.Stats()
 		pollerInfo := map[string]any{
 			"enabled":        true,
-			"admin_api":      activePoller.config.AdminAPIURL,
-			"interval":       activePoller.config.PollIntervalSeconds,
+			"admin_api":      p.config.AdminAPIURL,
+			"interval":       p.config.PollIntervalSeconds,
 			"jobs_processed": processed,
 		}
 		if !lastPoll.IsZero() {
@@ -86,21 +87,12 @@ func handlePrintNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	addr := net.JoinHostPort(req.IP, strconv.Itoa(req.Port))
-	conn, err := net.DialTimeout("tcp", addr, time.Duration(NetworkDialTimeout)*time.Second)
-	if err != nil {
-		writeJSON(w, 500, Response{Success: false, Error: fmt.Sprintf("Connection failed: %s", err.Error())})
-		return
-	}
-	defer conn.Close()
-
-	conn.SetWriteDeadline(time.Now().Add(time.Duration(NetworkWriteTimeout) * time.Second))
-	if _, err = conn.Write(printData); err != nil {
-		writeJSON(w, 500, Response{Success: false, Error: fmt.Sprintf("Write failed: %s", err.Error())})
+	if err := tcpSend(req.IP, req.Port, printData); err != nil {
+		writeJSON(w, 500, Response{Success: false, Error: err.Error()})
 		return
 	}
 
-	writeJSON(w, 200, Response{Success: true, Message: fmt.Sprintf("Sent %d bytes to %s", len(printData), addr)})
+	writeJSON(w, 200, Response{Success: true, Message: fmt.Sprintf("Sent %d bytes to %s:%d", len(printData), req.IP, req.Port)})
 }
 
 func handlePrintUSB(w http.ResponseWriter, r *http.Request) {
