@@ -29,7 +29,6 @@ func handleStatus(w http.ResponseWriter, _ *http.Request) {
 		pollerInfo := map[string]any{
 			"enabled":        true,
 			"admin_api":      activePoller.config.AdminAPIURL,
-			"branch_id":      activePoller.config.RestaurantBranchID,
 			"interval":       activePoller.config.PollIntervalSeconds,
 			"jobs_processed": processed,
 		}

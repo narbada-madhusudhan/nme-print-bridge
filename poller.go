@@ -112,11 +112,7 @@ func (p *Poller) pollOnce() {
 func (p *Poller) claimJobs() ([]claimedJob, error) {
 	url := fmt.Sprintf("%s/api/bridge/print-jobs/claim", p.config.AdminAPIURL)
 
-	body, _ := json.Marshal(map[string]string{
-		"restaurant_branch_id": p.config.RestaurantBranchID,
-	})
-
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, err
 	}

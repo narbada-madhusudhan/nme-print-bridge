@@ -162,13 +162,13 @@ func main() {
 
 	// Start background print job poller (activePoller is read by status handler)
 	var poller *Poller
-	if cfg.PollEnabled && cfg.AdminAPIURL != "" && cfg.RestaurantBranchID != "" {
+	if cfg.PollEnabled && cfg.AdminAPIURL != "" && cfg.ServiceKey != "" {
 		poller = NewPoller(cfg)
 		activePoller = poller
 		poller.Start()
 		fmt.Printf("  Poller: ON (every %ds → %s)\n", cfg.PollIntervalSeconds, cfg.AdminAPIURL)
-		log.Printf("[poller] Started — polling %s every %ds for branch %s",
-			cfg.AdminAPIURL, cfg.PollIntervalSeconds, cfg.RestaurantBranchID)
+		log.Printf("[poller] Started — polling %s every %ds",
+			cfg.AdminAPIURL, cfg.PollIntervalSeconds)
 	}
 
 	// Auto-update on startup
