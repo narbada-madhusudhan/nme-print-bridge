@@ -32,6 +32,7 @@ func loadConfig() Config {
 	cfg := Config{CertURL: DefaultCertURL}
 	data, err := os.ReadFile(configPath())
 	if err != nil {
+		cfg.PollIntervalSeconds = DefaultPollInterval
 		return cfg
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
