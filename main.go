@@ -119,6 +119,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
+	activeCertManager = cm
 
 	if cfg.HotelID != "" {
 		if err := cm.FetchAndVerify(); err != nil {

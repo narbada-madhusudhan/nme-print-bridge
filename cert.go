@@ -64,7 +64,18 @@ func NewCertManager(cfg Config) (*CertManager, error) {
 		cm.allowedOrigins[origin] = true
 	}
 
+	// Config-based origins (set via /config/poll or config.json)
+	for _, origin := range cfg.AllowedOrigins {
+		cm.allowedOrigins[origin] = true
+	}
+
 	return cm, nil
+}
+
+func (cm *CertManager) AddOrigin(origin string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.allowedOrigins[origin] = true
 }
 
 func (cm *CertManager) IsOriginAllowed(origin string) bool {

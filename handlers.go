@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strconv"
 	"sync/atomic"
@@ -16,6 +17,9 @@ import (
 
 // activePollerPtr is set by main before the server starts, read by status handler.
 var activePollerPtr atomic.Pointer[Poller]
+
+// activeCertManager is set by main, used by config handlers to add origins.
+var activeCertManager *CertManager
 
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	status := map[string]any{
@@ -162,13 +166,24 @@ func handleSetPollConfig(w http.ResponseWriter, r *http.Request) {
 		req.PollIntervalSeconds = DefaultPollInterval
 	}
 
+	// Extract origin from admin API URL and add to allowed origins
+	origin := extractOrigin(req.AdminAPIURL)
+
 	// Update config file
 	cfg := loadConfig()
 	cfg.AdminAPIURL = req.AdminAPIURL
 	cfg.ServiceKey = req.ServiceKey
 	cfg.PollEnabled = req.PollEnabled
 	cfg.PollIntervalSeconds = req.PollIntervalSeconds
+	if origin != "" {
+		cfg.AllowedOrigins = addUnique(cfg.AllowedOrigins, origin)
+	}
 	saveConfig(cfg)
+
+	// Add origin to cert manager so CORS works immediately
+	if activeCertManager != nil && origin != "" {
+		activeCertManager.AddOrigin(origin)
+	}
 
 	// Restart poller with new config
 	if old := activePollerPtr.Load(); old != nil {
@@ -240,4 +255,22 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 	}
 	conn.Close()
 	writeJSON(w, 200, map[string]any{"success": true, "online": true})
+}
+
+// extractOrigin returns the scheme+host from a URL (e.g., "https://admin.example.com")
+func extractOrigin(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func addUnique(slice []string, item string) []string {
+	for _, s := range slice {
+		if s == item {
+			return slice
+		}
+	}
+	return append(slice, item)
 }

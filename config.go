@@ -10,13 +10,14 @@ import (
 // ─── Config ────────────────────────────────────────────────────────────────
 
 type Config struct {
-	HotelID             string `json:"hotel_id"`
-	CertURL             string `json:"cert_url"`
-	AdminAPIURL         string `json:"admin_api_url"`
-	RestaurantBranchID  string `json:"restaurant_branch_id"`
-	ServiceKey          string `json:"service_key,omitempty"`
-	PollEnabled         bool   `json:"poll_enabled"`
-	PollIntervalSeconds int    `json:"poll_interval_seconds"`
+	HotelID             string   `json:"hotel_id"`
+	CertURL             string   `json:"cert_url"`
+	AdminAPIURL         string   `json:"admin_api_url"`
+	RestaurantBranchID  string   `json:"restaurant_branch_id"`
+	ServiceKey          string   `json:"service_key,omitempty"`
+	PollEnabled         bool     `json:"poll_enabled"`
+	PollIntervalSeconds int      `json:"poll_interval_seconds"`
+	AllowedOrigins      []string `json:"allowed_origins,omitempty"`
 }
 
 func configDir() string {
