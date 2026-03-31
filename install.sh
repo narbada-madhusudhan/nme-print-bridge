@@ -68,14 +68,22 @@ case "$ARCH" in
 esac
 
 BINARY_NAME="print-bridge-${SUFFIX}"
+
+# Get latest version tag
+VERSION=$(curl -sI "https://github.com/$REPO/releases/latest" | grep -i "^location:" | sed 's/.*tag\///' | tr -d '[:space:]' | tr -d '\r')
+if [ -z "$VERSION" ]; then
+  VERSION="latest"
+fi
+
 DOWNLOAD_URL="https://github.com/$REPO/releases/latest/download/$BINARY_NAME"
 
-echo "  OS:   $OS ($ARCH)"
-echo "  File: $BINARY_NAME"
+echo "  Version: $VERSION"
+echo "  OS:      $OS ($ARCH)"
+echo "  File:    $BINARY_NAME"
 echo ""
 
 # Download
-echo "  → Downloading latest release..."
+echo "  → Downloading $VERSION..."
 mkdir -p "$INSTALL_DIR"
 curl -sL "$DOWNLOAD_URL" -o "$INSTALL_DIR/nme-print-bridge"
 
@@ -97,18 +105,43 @@ echo "  ✓ Downloaded to $INSTALL_DIR/nme-print-bridge"
 echo "  → Setting up auto-start..."
 "$INSTALL_DIR/nme-print-bridge" --install
 
+# Verify bridge is running
+echo "  → Verifying bridge is running..."
+RUNNING=false
+for i in 1 2 3 4 5; do
+  sleep 1
+  if curl -s --connect-timeout 2 "http://localhost:9120/health" >/dev/null 2>&1; then
+    RUNNING=true
+    break
+  fi
+done
+
+# Get installed version from bridge
+INSTALLED_VERSION=$(curl -s --connect-timeout 2 "http://localhost:9120/" 2>/dev/null | grep -o '"version":"[^"]*"' | cut -d'"' -f4)
+if [ -z "$INSTALLED_VERSION" ]; then
+  INSTALLED_VERSION="$VERSION"
+fi
+
 echo ""
-echo "  ╔═══════════════════════════════════════╗"
-echo "  ║  ✓ Installation complete!             ║"
-echo "  ║                                       ║"
-echo "  ║  NME Print Bridge is now running      ║"
-echo "  ║  and will start automatically on      ║"
-echo "  ║  login.                               ║"
-echo "  ║                                       ║"
-echo "  ║  Status: http://localhost:9120        ║"
-echo "  ║                                       ║"
-echo "  ║  To uninstall:                        ║"
-echo "  ║  ~/Applications/nme-print-bridge      ║"
-echo "  ║    --uninstall                        ║"
-echo "  ╚═══════════════════════════════════════╝"
+if [ "$RUNNING" = true ]; then
+  printf "  ╔═══════════════════════════════════════╗\n"
+  printf "  ║  ✓ NME Print Bridge %-17s ║\n" "$INSTALLED_VERSION"
+  printf "  ║                                       ║\n"
+  printf "  ║  Running and auto-starts on login.    ║\n"
+  printf "  ║  Status: http://localhost:9120        ║\n"
+  printf "  ║                                       ║\n"
+  printf "  ║  To uninstall:                        ║\n"
+  printf "  ║  ~/Applications/nme-print-bridge      ║\n"
+  printf "  ║    --uninstall                        ║\n"
+  printf "  ╚═══════════════════════════════════════╝\n"
+else
+  printf "  ╔═══════════════════════════════════════╗\n"
+  printf "  ║  ! Installed but not responding       ║\n"
+  printf "  ║                                       ║\n"
+  printf "  ║  Try running manually:                ║\n"
+  printf "  ║  ~/Applications/nme-print-bridge      ║\n"
+  printf "  ║                                       ║\n"
+  printf "  ║  Check logs: /tmp/print-bridge.log    ║\n"
+  printf "  ╚═══════════════════════════════════════╝\n"
+fi
 echo ""

@@ -36,9 +36,9 @@ function Install-PrintBridge {
     # ── Main ─────────────────────────────────────────────────────────────
 
     Write-Host ""
-    Write-Host "  =======================================" -ForegroundColor Cyan
-    Write-Host "     NME Print Bridge - Installer        " -ForegroundColor Cyan
-    Write-Host "  =======================================" -ForegroundColor Cyan
+    Write-Host "  ╔═══════════════════════════════════════╗" -ForegroundColor Cyan
+    Write-Host "  ║     NME Print Bridge — Installer      ║" -ForegroundColor Cyan
+    Write-Host "  ╚═══════════════════════════════════════╝" -ForegroundColor Cyan
     Write-Host ""
 
     # Always kill any running bridge process and clean up legacy .bat first
@@ -127,36 +127,33 @@ function Install-PrintBridge {
 
     Write-Host ""
     if ($Running) {
-        Write-Host "  =======================================" -ForegroundColor Green
-        Write-Host "  OK Installation complete!              " -ForegroundColor Green
-        Write-Host "  Version: $Version" -ForegroundColor Green
-        Write-Host "                                         "
-        Write-Host "  NME Print Bridge is now running and    "
-        Write-Host "  will start automatically on login.     "
-        Write-Host "                                         "
-        Write-Host "  Status: http://localhost:9120          "
-        Write-Host "                                         "
-        Write-Host "  To uninstall:                          "
-        Write-Host "  & '$ExePath' --uninstall               "
-        Write-Host "  =======================================" -ForegroundColor Green
+        $PadVersion = $Version.PadRight(17)
+        Write-Host "  ╔═══════════════════════════════════════╗" -ForegroundColor Green
+        Write-Host "  ║  ✓ NME Print Bridge $PadVersion ║" -ForegroundColor Green
+        Write-Host "  ║                                       ║" -ForegroundColor Green
+        Write-Host "  ║  Running and auto-starts on login.    ║" -ForegroundColor Green
+        Write-Host "  ║  Status: http://localhost:9120        ║" -ForegroundColor Green
+        Write-Host "  ║                                       ║" -ForegroundColor Green
+        Write-Host "  ║  To uninstall:                        ║" -ForegroundColor Green
+        Write-Host "  ║  & '$ExePath'                         ║" -ForegroundColor Green
+        Write-Host "  ║    --uninstall                        ║" -ForegroundColor Green
+        Write-Host "  ╚═══════════════════════════════════════╝" -ForegroundColor Green
     } else {
-        Write-Host "  =======================================" -ForegroundColor Yellow
-        Write-Host "  ! Installation finished but bridge     " -ForegroundColor Yellow
-        Write-Host "    did not respond on port 9120.        " -ForegroundColor Yellow
-        Write-Host "                                         "
-        Write-Host "  Try running manually to see errors:    "
-        Write-Host "  & '$ExePath'                           "
-        Write-Host "                                         "
+        Write-Host "  ╔═══════════════════════════════════════╗" -ForegroundColor Yellow
+        Write-Host "  ║  ! Installed but not responding       ║" -ForegroundColor Yellow
+        Write-Host "  ║                                       ║" -ForegroundColor Yellow
+        Write-Host "  ║  Try running manually:                ║" -ForegroundColor Yellow
+        Write-Host "  ║  & '$ExePath'                         ║" -ForegroundColor Yellow
+        Write-Host "  ║                                       ║" -ForegroundColor Yellow
         if ($CrashReason) {
-            Write-Host "  Log output ($LogFile):" -ForegroundColor Yellow
-            Write-Host $CrashReason -ForegroundColor Gray
+            Write-Host "  ║  Check logs:                          ║" -ForegroundColor Yellow
+            Write-Host "  ║  $LogFile" -ForegroundColor Yellow
         } else {
-            Write-Host "  Common fixes:                          "
-            Write-Host "  - Allow through Windows Firewall       "
-            Write-Host "  - Allow in Windows Defender/antivirus  "
-            Write-Host "  - Run PowerShell as Administrator      "
+            Write-Host "  ║  Common fixes:                        ║" -ForegroundColor Yellow
+            Write-Host "  ║  - Allow through Windows Firewall     ║" -ForegroundColor Yellow
+            Write-Host "  ║  - Allow in Windows Defender           ║" -ForegroundColor Yellow
         }
-        Write-Host "  =======================================" -ForegroundColor Yellow
+        Write-Host "  ╚═══════════════════════════════════════╝" -ForegroundColor Yellow
     }
     Write-Host ""
 }
