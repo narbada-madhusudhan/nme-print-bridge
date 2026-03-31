@@ -484,35 +484,24 @@ func listPrinters() ([]PrinterInfo, error) {
 // probeUSBPrinter sends DLE EOT status command to check if printer is responsive.
 // Returns true if the printer responds within timeout.
 func probeUSBPrinter(printerName string) bool {
-	// DLE EOT 1 = query printer status (real-time, bypasses print queue)
-	statusCmd := []byte{0x10, 0x04, 0x01}
-
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("probe-%d.raw", time.Now().UnixNano()))
-	if err := os.WriteFile(tmpFile, statusCmd, 0644); err != nil {
-		return false
-	}
-	defer os.Remove(tmpFile)
-
 	switch runtime.GOOS {
 	case "darwin", "linux":
-		// Use lp with short timeout — if printer is off, lp will hang or error
+		statusCmd := []byte{0x10, 0x04, 0x01} // DLE EOT 1 = query printer status
+		tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("probe-%d.raw", time.Now().UnixNano()))
+		if err := os.WriteFile(tmpFile, statusCmd, 0644); err != nil {
+			return false
+		}
+		defer os.Remove(tmpFile)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "lp", "-d", printerName, "-o", "raw", tmpFile)
 		err := cmd.Run()
 		if ctx.Err() == context.DeadlineExceeded {
-			return false // timed out = printer not responding
-		}
-		return err == nil
-	case "windows":
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		cmd := exec.CommandContext(ctx, "cmd", "/c", fmt.Sprintf(`copy /b "%s" "\\localhost\%s"`, tmpFile, printerName))
-		err := cmd.Run()
-		if ctx.Err() == context.DeadlineExceeded {
 			return false
 		}
 		return err == nil
+	case "windows":
+		return canOpenPrinter(printerName)
 	}
 	return false
 }
@@ -670,92 +659,20 @@ func listPrintersWindows() ([]PrinterInfo, error) {
 }
 
 func printToUSB(printerName string, data []byte) error {
-	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("print-%d.raw", time.Now().UnixNano()))
-	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-	defer os.Remove(tmpFile)
-
 	switch runtime.GOOS {
 	case "darwin", "linux":
+		tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("print-%d.raw", time.Now().UnixNano()))
+		if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write temp file: %w", err)
+		}
+		defer os.Remove(tmpFile)
 		cmd := exec.Command("lp", "-d", printerName, "-o", "raw", tmpFile)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("lp error: %s — %s", err, string(out))
 		}
 	case "windows":
-		// Try copy /b to shared printer first (works if printer is shared)
-		cmd := exec.Command("cmd", "/c", fmt.Sprintf(`copy /b "%s" "\\localhost\%s"`, tmpFile, printerName))
-		if err := cmd.Run(); err != nil {
-			// Fallback: use .NET raw printing API to send bytes directly
-			// Out-Printer converts bytes to text — we must use RawPrinterHelper instead
-			psScript := fmt.Sprintf(`
-$PrinterName = '%s'
-$FilePath = '%s'
-$bytes = [System.IO.File]::ReadAllBytes($FilePath)
-
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-
-public class RawPrinterHelper {
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public struct DOCINFOW {
-        [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pDatatype;
-    }
-
-    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
-
-    [DllImport("winspool.drv", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, ref DOCINFOW pDocInfo);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    public static extern bool StartPagePrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    public static extern bool EndPagePrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    public static extern bool EndDocPrinter(IntPtr hPrinter);
-
-    [DllImport("winspool.drv", SetLastError = true)]
-    public static extern bool ClosePrinter(IntPtr hPrinter);
-
-    public static bool SendBytesToPrinter(string printerName, byte[] data) {
-        IntPtr hPrinter;
-        if (!OpenPrinter(printerName, out hPrinter, IntPtr.Zero)) return false;
-
-        var docInfo = new DOCINFOW { pDocName = "NME Print", pDatatype = "RAW" };
-        if (!StartDocPrinter(hPrinter, 1, ref docInfo)) { ClosePrinter(hPrinter); return false; }
-        if (!StartPagePrinter(hPrinter)) { EndDocPrinter(hPrinter); ClosePrinter(hPrinter); return false; }
-
-        IntPtr pBytes = Marshal.AllocHGlobal(data.Length);
-        Marshal.Copy(data, 0, pBytes, data.Length);
-        int written;
-        bool ok = WritePrinter(hPrinter, pBytes, data.Length, out written);
-        Marshal.FreeHGlobal(pBytes);
-
-        EndPagePrinter(hPrinter);
-        EndDocPrinter(hPrinter);
-        ClosePrinter(hPrinter);
-        return ok && written == data.Length;
-    }
-}
-'@
-
-if (-not [RawPrinterHelper]::SendBytesToPrinter($PrinterName, $bytes)) {
-    throw "Failed to send raw data to printer '$PrinterName'"
-}
-`, printerName, tmpFile)
-			ps := exec.Command("powershell", "-NoProfile", "-Command", psScript)
-			if out, err := ps.CombinedOutput(); err != nil {
-				return fmt.Errorf("print error: %s — %s", err, string(out))
-			}
+		if err := sendRawToPrinter(printerName, data); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
