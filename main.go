@@ -21,13 +21,16 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -94,7 +97,9 @@ func loadConfig() Config {
 	if err != nil {
 		return cfg
 	}
-	json.Unmarshal(data, &cfg)
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("[config] Warning: failed to parse config.json: %v", err)
+	}
 	if cfg.CertURL == "" {
 		cfg.CertURL = DefaultCertURL
 	}
@@ -104,7 +109,7 @@ func loadConfig() Config {
 func saveConfig(cfg Config) {
 	os.MkdirAll(configDir(), 0755)
 	data, _ := json.MarshalIndent(cfg, "", "  ")
-	os.WriteFile(configPath(), data, 0644)
+	os.WriteFile(configPath(), data, 0600)
 }
 
 // ─── Certificate Manager ───────────────────────────────────────────────────
@@ -210,6 +215,17 @@ func (cm *CertManager) verifyCert(cert *SignedCert) error {
 		return fmt.Errorf("signature verification failed")
 	}
 
+	// Check not-before
+	if cert.Payload.IssuedAt != "" {
+		issuedAt, err := time.Parse(time.RFC3339, cert.Payload.IssuedAt)
+		if err != nil {
+			return fmt.Errorf("invalid issued_at: %w", err)
+		}
+		if time.Now().Before(issuedAt) {
+			return fmt.Errorf("certificate not yet valid (issued_at: %s)", cert.Payload.IssuedAt)
+		}
+	}
+
 	// Check expiry
 	expiresAt, err := time.Parse(time.RFC3339, cert.Payload.ExpiresAt)
 	if err != nil {
@@ -246,7 +262,7 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 func (cm *CertManager) cacheCert(cert *SignedCert) {
 	os.MkdirAll(configDir(), 0755)
 	data, _ := json.MarshalIndent(cert, "", "  ")
-	os.WriteFile(cm.cachePath, data, 0644)
+	os.WriteFile(cm.cachePath, data, 0600)
 }
 
 func (cm *CertManager) loadCachedCert() error {
@@ -337,6 +353,7 @@ func corsMiddleware(cm *CertManager, next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
+		limitBody(w, r)
 		next(w, r)
 	}
 }
@@ -364,7 +381,7 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func handleListPrinters(w http.ResponseWriter, _ *http.Request) {
-	printers, err := listPrinters()
+	printers, err := listPrintersCached()
 	if err != nil {
 		writeJSON(w, 500, Response{Success: false, Error: err.Error()})
 		return
@@ -382,17 +399,29 @@ func handlePrintNetwork(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, Response{Success: false, Error: "ip is required"})
 		return
 	}
+	if err := validateIP(req.IP); err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: err.Error()})
+		return
+	}
 	if req.Port == 0 {
 		req.Port = 9100
 	}
+	if req.Port < 1 || req.Port > 65535 {
+		writeJSON(w, 400, Response{Success: false, Error: "port must be 1-65535"})
+		return
+	}
 
-	printData := decodeData(req.Data, req.Raw)
+	printData, err := decodeData(req.Data, req.Raw)
+	if err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: err.Error()})
+		return
+	}
 	if len(printData) == 0 {
 		writeJSON(w, 400, Response{Success: false, Error: "No print data"})
 		return
 	}
 
-	addr := fmt.Sprintf("%s:%d", req.IP, req.Port)
+	addr := net.JoinHostPort(req.IP, strconv.Itoa(req.Port))
 	conn, err := net.DialTimeout("tcp", addr, 15*time.Second)
 	if err != nil {
 		writeJSON(w, 500, Response{Success: false, Error: fmt.Sprintf("Connection failed: %s", err.Error())})
@@ -419,8 +448,16 @@ func handlePrintUSB(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, Response{Success: false, Error: "printer name is required"})
 		return
 	}
+	if err := validatePrinterName(req.Printer); err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: err.Error()})
+		return
+	}
 
-	printData := decodeData(req.Data, req.Raw)
+	printData, err := decodeData(req.Data, req.Raw)
+	if err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: err.Error()})
+		return
+	}
 	if len(printData) == 0 {
 		writeJSON(w, 400, Response{Success: false, Error: "No print data"})
 		return
@@ -444,11 +481,19 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, Response{Success: false, Error: "ip is required"})
 		return
 	}
+	if err := validateIP(req.IP); err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: err.Error()})
+		return
+	}
 	if req.Port == 0 {
 		req.Port = 9100
 	}
+	if req.Port < 1 || req.Port > 65535 {
+		writeJSON(w, 400, Response{Success: false, Error: "port must be 1-65535"})
+		return
+	}
 
-	addr := fmt.Sprintf("%s:%d", req.IP, req.Port)
+	addr := net.JoinHostPort(req.IP, strconv.Itoa(req.Port))
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		writeJSON(w, 200, map[string]any{"success": true, "online": false, "error": err.Error()})
@@ -460,14 +505,85 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
-func decodeData(b64, raw string) []byte {
+func decodeData(b64, raw string) ([]byte, error) {
 	if b64 != "" {
 		data, err := base64.StdEncoding.DecodeString(b64)
-		if err == nil {
-			return data
+		if err != nil {
+			return nil, fmt.Errorf("invalid base64 data: %w", err)
+		}
+		return data, nil
+	}
+	return []byte(raw), nil
+}
+
+const maxBodySize = 10 * 1024 * 1024 // 10 MB
+
+func limitBody(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+}
+
+func validateIP(ip string) error {
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("invalid IP address: %s", ip)
+	}
+	return nil
+}
+
+var (
+	printerCache     []PrinterInfo
+	printerCacheTime time.Time
+	printerCacheMu   sync.Mutex
+	printerCacheTTL  = 30 * time.Second
+)
+
+func listPrintersCached() ([]PrinterInfo, error) {
+	printerCacheMu.Lock()
+	defer printerCacheMu.Unlock()
+	if printerCache != nil && time.Since(printerCacheTime) < printerCacheTTL {
+		return printerCache, nil
+	}
+	printers, err := listPrinters()
+	if err != nil {
+		return nil, err
+	}
+	printerCache = printers
+	printerCacheTime = time.Now()
+	return printers, nil
+}
+
+func validatePrinterName(name string) error {
+	printers, err := listPrintersCached()
+	if err != nil {
+		return fmt.Errorf("cannot list printers: %w", err)
+	}
+	for _, p := range printers {
+		if p.Name == name {
+			return nil
 		}
 	}
-	return []byte(raw)
+	return fmt.Errorf("unknown printer: %s", name)
+}
+
+func compareSemver(a, b string) int {
+	// Non-release builds never trigger updates
+	if a == "dev" || b == "dev" {
+		return 0
+	}
+	aParts := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	bParts := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	for i := 0; i < 3; i++ {
+		var ai, bi int
+		if i < len(aParts) {
+			ai, _ = strconv.Atoi(aParts[i])
+		}
+		if i < len(bParts) {
+			bi, _ = strconv.Atoi(bParts[i])
+		}
+		if ai != bi {
+			return ai - bi
+		}
+	}
+	return 0
 }
 
 func listPrinters() ([]PrinterInfo, error) {
@@ -743,12 +859,10 @@ func checkForUpdate() (*UpdateInfo, error) {
 		return nil, err
 	}
 
-	latest := strings.TrimPrefix(release.TagName, "v")
-	current := strings.TrimPrefix(Version, "v")
 	suffix := getAssetSuffix()
 
 	info := &UpdateInfo{
-		Available:      latest != current && latest > current,
+		Available:      compareSemver(release.TagName, Version) > 0,
 		CurrentVersion: Version,
 		LatestVersion:  release.TagName,
 		ReleaseURL:     release.HTMLURL,
@@ -767,6 +881,11 @@ func checkForUpdate() (*UpdateInfo, error) {
 }
 
 func performUpdate(downloadURL string) error {
+	// Validate download URL is from GitHub
+	if !strings.HasPrefix(downloadURL, "https://github.com/") && !strings.HasPrefix(downloadURL, "https://objects.githubusercontent.com/") {
+		return fmt.Errorf("untrusted download URL: %s", downloadURL)
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("cannot determine executable path: %w", err)
@@ -795,19 +914,11 @@ func performUpdate(downloadURL string) error {
 		return fmt.Errorf("cannot create temp file: %w", err)
 	}
 
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-				tmpFile.Close()
-				os.Remove(tmpPath)
-				return fmt.Errorf("write failed: %w", writeErr)
-			}
-		}
-		if readErr != nil {
-			break
-		}
+	const maxDownloadSize = 100 * 1024 * 1024 // 100 MB
+	if _, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxDownloadSize)); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("download write failed: %w", err)
 	}
 	tmpFile.Close()
 
@@ -1219,6 +1330,29 @@ func main() {
 		}
 	}()
 
+	srv := &http.Server{
+		Addr:           addr,
+		Handler:        mux,
+		ReadTimeout:    15 * time.Second,
+		WriteTimeout:   60 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 1 << 20, // 1 MB
+	}
+
+	// Graceful shutdown on SIGINT/SIGTERM
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		<-sigCh
+		log.Println("[server] Shutting down gracefully...")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		srv.Shutdown(ctx)
+	}()
+
 	fmt.Println()
-	log.Fatal(http.ListenAndServe(addr, mux))
+	if err := srv.ListenAndServe(); err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	log.Println("[server] Stopped.")
 }
