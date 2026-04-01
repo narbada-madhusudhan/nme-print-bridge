@@ -11,3 +11,7 @@ func sendRawToPrinter(printerName string, data []byte) error {
 func canOpenPrinter(printerName string) bool {
 	return false
 }
+
+func enumLocalPrinters() ([]PrinterInfo, error) {
+	return nil, fmt.Errorf("enumLocalPrinters is only supported on Windows")
+}

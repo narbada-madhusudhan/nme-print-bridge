@@ -15,6 +15,7 @@ var (
 	endPagePrinter   = winspool.NewProc("EndPagePrinter")
 	endDocPrinter    = winspool.NewProc("EndDocPrinter")
 	closePrinter     = winspool.NewProc("ClosePrinter")
+	enumPrintersW    = winspool.NewProc("EnumPrintersW")
 )
 
 // DOC_INFO_1W matches the Windows DOC_INFO_1W struct layout.
@@ -71,6 +72,76 @@ func sendRawToPrinter(printerName string, data []byte) error {
 		return fmt.Errorf("WritePrinter: wrote %d of %d bytes", written, len(data))
 	}
 	return nil
+}
+
+// PRINTER_INFO_2W matches the Windows PRINTER_INFO_2W struct layout.
+// We only need pPrinterName and Status; the rest are placeholders.
+type printerInfo2W struct {
+	pServerName        *uint16
+	pPrinterName       *uint16
+	pShareName         *uint16
+	pPortName          *uint16
+	pDriverName        *uint16
+	pComment           *uint16
+	pLocation          *uint16
+	pDevMode           uintptr
+	pSepFile           *uint16
+	pPrintProcessor    *uint16
+	pDatatype          *uint16
+	pParameters        *uint16
+	pSecurityDescriptor uintptr
+	Attributes         uint32
+	Priority           uint32
+	DefaultPriority    uint32
+	StartTime          uint32
+	UntilTime          uint32
+	Status             uint32
+	cJobs              uint32
+	AveragePPM         uint32
+}
+
+const (
+	printerEnumLocal      = 0x00000002
+	printerEnumConnections = 0x00000004
+)
+
+// enumLocalPrinters lists printers using the Windows EnumPrintersW API.
+func enumLocalPrinters() ([]PrinterInfo, error) {
+	flags := uintptr(printerEnumLocal | printerEnumConnections)
+	level := uintptr(2) // PRINTER_INFO_2
+
+	// First call: get required buffer size
+	var needed, returned uint32
+	enumPrintersW.Call(flags, 0, level, 0, 0,
+		uintptr(unsafe.Pointer(&needed)),
+		uintptr(unsafe.Pointer(&returned)))
+
+	if needed == 0 {
+		return []PrinterInfo{}, nil
+	}
+
+	buf := make([]byte, needed)
+	ret, _, _ := enumPrintersW.Call(flags, 0, level,
+		uintptr(unsafe.Pointer(&buf[0])),
+		uintptr(needed),
+		uintptr(unsafe.Pointer(&needed)),
+		uintptr(unsafe.Pointer(&returned)))
+
+	if ret == 0 {
+		return nil, fmt.Errorf("EnumPrintersW failed")
+	}
+
+	// Interpret buffer as array of printerInfo2W
+	structSize := unsafe.Sizeof(printerInfo2W{})
+	printers := make([]PrinterInfo, 0, returned)
+	for i := uint32(0); i < returned; i++ {
+		info := (*printerInfo2W)(unsafe.Pointer(&buf[uintptr(i)*structSize]))
+		name := syscall.UTF16ToString((*[1024]uint16)(unsafe.Pointer(info.pPrinterName))[:])
+		// Status == 0 means the printer is ready/idle
+		enabled := info.Status == 0
+		printers = append(printers, PrinterInfo{Name: name, Enabled: enabled})
+	}
+	return printers, nil
 }
 
 // canOpenPrinter checks if a printer is registered with the Windows print spooler.

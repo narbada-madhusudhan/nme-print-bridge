@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -199,34 +198,7 @@ func getConnectedUSBPrinters() map[string]bool {
 }
 
 func listPrintersWindows() ([]PrinterInfo, error) {
-	out, err := exec.Command("powershell", "-Command",
-		`Get-Printer | Select-Object Name, PrinterStatus | ConvertTo-Json`).CombinedOutput()
-	if err != nil {
-		return []PrinterInfo{}, nil
-	}
-	var raw any
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return []PrinterInfo{}, nil
-	}
-	var items []map[string]any
-	switch v := raw.(type) {
-	case []any:
-		for _, item := range v {
-			if m, ok := item.(map[string]any); ok {
-				items = append(items, m)
-			}
-		}
-	case map[string]any:
-		items = append(items, v)
-	}
-	var printers []PrinterInfo
-	for _, item := range items {
-		name, _ := item["Name"].(string)
-		status, _ := item["PrinterStatus"].(float64)
-		enabled := status == 0
-		printers = append(printers, PrinterInfo{Name: name, Enabled: enabled})
-	}
-	return printers, nil
+	return enumLocalPrinters()
 }
 
 // ─── Print to USB/OS Printer ───────────────────────────────────────────────
