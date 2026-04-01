@@ -351,8 +351,8 @@ func TestCorsMiddleware_Preflight(t *testing.T) {
 	r.Header.Set("Origin", "http://localhost:3000")
 	handler(w, r)
 
-	if w.Code != 200 {
-		t.Errorf("preflight should return 200, got %d", w.Code)
+	if w.Code != 204 {
+		t.Errorf("preflight should return 204, got %d", w.Code)
 	}
 	if innerCalled {
 		t.Error("inner handler should not be called for OPTIONS")

@@ -44,19 +44,18 @@ func corsMiddleware(cm *CertManager, next http.HandlerFunc) http.HandlerFunc {
 
 		if cm.IsOriginAllowed(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-		// Chrome 104+ Private Network Access: public websites accessing localhost
-		// require this header in the preflight response. Without it, Chrome blocks
-		// the request entirely. Safe because we only bind to 127.0.0.1.
-		if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
-			w.Header().Set("Access-Control-Allow-Private-Network", "true")
-		}
+		// Chrome 104+ Private Network Access: public websites (HTTPS) accessing
+		// localhost require this header. Set unconditionally on all responses —
+		// safe because we only bind to 127.0.0.1.
+		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 
