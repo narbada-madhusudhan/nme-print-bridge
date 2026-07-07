@@ -34,6 +34,7 @@ func loadConfig() Config {
 	data, err := os.ReadFile(configPath())
 	if err != nil {
 		cfg.PollIntervalSeconds = DefaultPollInterval
+		cfg.AllowedOrigins = append([]string(nil), DefaultAllowedOrigins...)
 		return cfg
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
@@ -44,6 +45,12 @@ func loadConfig() Config {
 	}
 	if cfg.PollIntervalSeconds < MinPollInterval {
 		cfg.PollIntervalSeconds = DefaultPollInterval
+	}
+	if len(cfg.AllowedOrigins) == 0 {
+		// First run (or config predates this field): seed with the
+		// built-in defaults. From here on, config.json is authoritative —
+		// edit allowed_origins there to rotate endpoints without a rebuild.
+		cfg.AllowedOrigins = append([]string(nil), DefaultAllowedOrigins...)
 	}
 	return cfg
 }

@@ -31,7 +31,6 @@ import (
 // Version is set at build time via: go build -ldflags "-X main.Version=vX.Y.Z"
 var Version = "dev"
 
-
 // Root public key — baked in at compile time via ldflags
 // Override with: go build -ldflags "-X main.RootPublicKeyB64=..."
 var RootPublicKeyB64 = "PYpHIvPZS5ynAaz2iUy0iD3FAiizQ1Wi0Ee7AUHb2Ho="
@@ -39,10 +38,10 @@ var RootPublicKeyB64 = "PYpHIvPZS5ynAaz2iUy0iD3FAiizQ1Wi0Ee7AUHb2Ho="
 // Default cert URL — override via config or CLI flag
 var DefaultCertURL = "https://printbridge.narbadatech.com/api/certs"
 
-// Built-in allowed origins — always allowed regardless of certificate.
-// These are baked in for production use before the central cert API is live.
-// Remove once cert system is fully deployed.
-var BuiltInAllowedOrigins = []string{
+// Default allowed origins — seeded into config.json's allowed_origins on
+// first run (see loadConfig). Editing config.json rotates the endpoint set
+// without a rebuild; this var only supplies the initial defaults.
+var DefaultAllowedOrigins = []string{
 	"https://godawariresort.com",
 	"http://godawariresort.com",
 	"https://admin.godawariresort.com",

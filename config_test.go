@@ -101,6 +101,44 @@ func TestLoadConfig_PollIntervalMinimum(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_AllowedOriginsDefaultsOnFirstRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := loadConfig()
+	if len(cfg.AllowedOrigins) != len(DefaultAllowedOrigins) {
+		t.Fatalf("AllowedOrigins = %v, want defaults %v", cfg.AllowedOrigins, DefaultAllowedOrigins)
+	}
+	for i, origin := range DefaultAllowedOrigins {
+		if cfg.AllowedOrigins[i] != origin {
+			t.Errorf("AllowedOrigins[%d] = %q, want %q", i, cfg.AllowedOrigins[i], origin)
+		}
+	}
+}
+
+func TestLoadConfig_AllowedOriginsRotateViaConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfgDir := filepath.Join(tmpDir, ConfigDirName)
+	os.MkdirAll(cfgDir, 0755)
+
+	// Operator rotates the endpoint by editing config.json directly —
+	// no rebuild needed, and the built-in defaults are NOT force-merged back in.
+	custom := Config{AllowedOrigins: []string{"https://new-endpoint.example.com"}}
+	data, _ := json.Marshal(custom)
+	os.WriteFile(filepath.Join(cfgDir, ConfigFile), data, 0600)
+
+	loaded := loadConfig()
+	if len(loaded.AllowedOrigins) != 1 || loaded.AllowedOrigins[0] != "https://new-endpoint.example.com" {
+		t.Errorf("AllowedOrigins = %v, want only the rotated origin", loaded.AllowedOrigins)
+	}
+}
+
 func TestSaveConfig_RoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -135,12 +173,12 @@ func TestCompareSemver(t *testing.T) {
 		want int
 	}{
 		{"v1.0.0", "v1.0.0", 0},
-		{"v2.0.0", "v1.0.0", 1},    // positive = a > b
-		{"v1.0.0", "v2.0.0", -1},   // negative = a < b
-		{"v1.10.0", "v1.9.0", 1},   // semver not lexicographic
+		{"v2.0.0", "v1.0.0", 1},  // positive = a > b
+		{"v1.0.0", "v2.0.0", -1}, // negative = a < b
+		{"v1.10.0", "v1.9.0", 1}, // semver not lexicographic
 		{"v2.0.0", "v1.99.99", 1},
 		{"v1.0.1", "v1.0.0", 1},
-		{"dev", "v1.0.0", 0},       // dev never triggers update
+		{"dev", "v1.0.0", 0}, // dev never triggers update
 		{"v1.0.0", "dev", 0},
 	}
 
