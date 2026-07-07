@@ -55,7 +55,7 @@ func main() {
 	// On Windows (-H windowsgui), stdout/stderr go nowhere.
 	// Write logs to a file so errors are diagnosable.
 	if runtime.GOOS == "windows" {
-		os.MkdirAll(configDir(), 0755)
+		os.MkdirAll(configDir(), 0700)
 		logPath := filepath.Join(configDir(), LogFile)
 		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
 			log.SetOutput(logFile)
@@ -68,7 +68,7 @@ func main() {
 	certURL := flag.String("cert-url", "", "Certificate API URL")
 	adminAPIURL := flag.String("admin-api-url", "", "Admin API URL for print job polling")
 	branchID := flag.String("branch-id", "", "Restaurant branch ID for print job polling")
-	serviceKey := flag.String("service-key", "", "Service key for admin API authentication")
+	serviceKey := flag.String("service-key", "", "DEPRECATED: service key for admin API authentication (visible in shell history / process list). Set $SERVICE_KEY instead")
 	poll := flag.Bool("poll", false, "Enable background print job polling")
 	install := flag.Bool("install", false, "Install auto-start (runs on login)")
 	uninstall := flag.Bool("uninstall", false, "Remove auto-start")
@@ -107,12 +107,17 @@ func main() {
 		cfg.RestaurantBranchID = *branchID
 	}
 	if *serviceKey != "" {
+		fmt.Fprintln(os.Stderr, "  ⚠ -service-key is deprecated and insecure (visible in shell history / process list). Set the SERVICE_KEY environment variable instead.")
 		cfg.ServiceKey = *serviceKey
 	}
 	if *poll {
 		cfg.PollEnabled = true
 	}
 	saveConfig(cfg)
+
+	// $SERVICE_KEY always wins over whatever's on disk, and is deliberately
+	// applied AFTER saveConfig so it never gets persisted to config.json.
+	cfg.ServiceKey = resolveServiceKey(cfg.ServiceKey)
 
 	cm, err := NewCertManager(cfg)
 	if err != nil {

@@ -183,7 +183,7 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 }
 
 func (cm *CertManager) cacheCert(cert *SignedCert) {
-	os.MkdirAll(configDir(), 0755)
+	os.MkdirAll(configDir(), 0700)
 	data, _ := json.MarshalIndent(cert, "", "  ")
 	os.WriteFile(cm.cachePath, data, 0600)
 }

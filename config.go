@@ -56,7 +56,22 @@ func loadConfig() Config {
 }
 
 func saveConfig(cfg Config) {
-	os.MkdirAll(configDir(), 0755)
+	dir := configDir()
+	os.MkdirAll(dir, 0700)
+	// MkdirAll leaves an already-existing dir's mode untouched, so chmod
+	// explicitly — this tightens dirs from older installs that predate 0700.
+	os.Chmod(dir, 0700)
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	os.WriteFile(configPath(), data, 0600)
+}
+
+// resolveServiceKey applies env-over-config precedence: $SERVICE_KEY, when
+// set, always wins over whatever was loaded from config.json. This lets
+// operators avoid ever persisting the key to disk. fileKey is returned
+// unchanged when the env var is unset, preserving old config.json-only setups.
+func resolveServiceKey(fileKey string) string {
+	if envKey := os.Getenv("SERVICE_KEY"); envKey != "" {
+		return envKey
+	}
+	return fileKey
 }
