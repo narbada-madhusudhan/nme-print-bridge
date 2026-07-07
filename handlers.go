@@ -33,10 +33,11 @@ func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	if p := activePollerPtr.Load(); p != nil {
 		processed, lastPoll := p.Stats()
 		pollerInfo := map[string]any{
-			"enabled":        true,
-			"admin_api":      p.config.AdminAPIURL,
-			"interval":       p.config.PollIntervalSeconds,
-			"jobs_processed": processed,
+			"enabled":                true,
+			"admin_api":              p.config.AdminAPIURL,
+			"interval":               p.config.PollIntervalSeconds,
+			"jobs_processed":         processed,
+			"status_update_failures": p.StatusUpdateFailures(),
 		}
 		if !lastPoll.IsZero() {
 			pollerInfo["last_poll"] = lastPoll.Format(time.RFC3339)
@@ -145,10 +146,10 @@ type PollConfigReq struct {
 func handleGetPollConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := loadConfig()
 	writeJSON(w, 200, Response{Success: true, Data: map[string]any{
-		"admin_api_url":       cfg.AdminAPIURL,
-		"poll_enabled":        cfg.PollEnabled,
+		"admin_api_url":         cfg.AdminAPIURL,
+		"poll_enabled":          cfg.PollEnabled,
 		"poll_interval_seconds": cfg.PollIntervalSeconds,
-		"has_service_key":     cfg.ServiceKey != "",
+		"has_service_key":       cfg.ServiceKey != "",
 	}})
 }
 

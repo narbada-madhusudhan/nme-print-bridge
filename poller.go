@@ -14,13 +14,18 @@ import (
 // ─── Print Job Poller ──────────────────────────────────────────────────────
 
 type Poller struct {
-	config        Config
-	client        *http.Client
-	stopCh        chan struct{}
-	doneCh        chan struct{}
-	jobsProcessed atomic.Int64
-	lastPollTime  atomic.Value // stores time.Time
+	config               Config
+	client               *http.Client
+	stopCh               chan struct{}
+	doneCh               chan struct{}
+	jobsProcessed        atomic.Int64
+	lastPollTime         atomic.Value // stores time.Time
+	statusUpdateFailures atomic.Int64
 }
+
+// statusUpdateBackoffs is the delay before each retry of a failed status PATCH.
+// Overridden in tests to avoid real sleeps.
+var statusUpdateBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second}
 
 type claimedJob struct {
 	ID        string          `json:"id"`
@@ -83,6 +88,12 @@ func (p *Poller) Stats() (int64, time.Time) {
 	processed := p.jobsProcessed.Load()
 	lastPoll, _ := p.lastPollTime.Load().(time.Time)
 	return processed, lastPoll
+}
+
+// StatusUpdateFailures returns the count of status PATCHes that exhausted
+// all retries without succeeding.
+func (p *Poller) StatusUpdateFailures() int64 {
+	return p.statusUpdateFailures.Load()
 }
 
 // ─── Core Polling Logic ────────────────────────────────────────────────────
@@ -209,6 +220,10 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	log.Printf("[poller] Job %s: printed to %s", job.ID, target)
 }
 
+// updateStatus PATCHes the job's status to resort-os, retrying with backoff
+// on failure. A transient failure that's never retried would leave the job
+// stuck PRINTING until stale-recovery resets it to PENDING, risking a
+// duplicate print — so we make a bounded effort to land the final status.
 func (p *Poller) updateStatus(jobID, status, errMsg string) {
 	url := fmt.Sprintf("%s/api/bridge/print-jobs/%s/status", p.config.AdminAPIURL, jobID)
 
@@ -218,13 +233,32 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 	}
 	body, _ := json.Marshal(payload)
 
+	maxAttempts := len(statusUpdateBackoffs) + 1
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			time.Sleep(statusUpdateBackoffs[attempt-2])
+		}
+		if err := p.sendStatusUpdate(url, body); err != nil {
+			lastErr = err
+			log.Printf("[poller] Status update for %s failed (attempt %d/%d): %v", jobID, attempt, maxAttempts, err)
+			continue
+		}
+		return
+	}
+
+	p.statusUpdateFailures.Add(1)
+	log.Printf("[poller] Status update for %s FAILED after %d attempts, giving up: %v", jobID, maxAttempts, lastErr)
+}
+
+// sendStatusUpdate performs a single PATCH attempt.
+func (p *Poller) sendStatusUpdate(url string, body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(PollStatusUpdateTimeout)*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[poller] Status update request failed: %v", err)
-		return
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if p.config.ServiceKey != "" {
@@ -233,10 +267,14 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		log.Printf("[poller] Status update for %s failed: %v", jobID, err)
-		return
+		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("status update returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (p *Poller) jobAge(job claimedJob) time.Duration {

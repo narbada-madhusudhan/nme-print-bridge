@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -110,7 +111,7 @@ func TestPoller_ClaimJobs_APIFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(claimResponse{
 			Success: false,
-			Error:   &struct {
+			Error: &struct {
 				Message string `json:"message"`
 			}{Message: "database error"},
 		})
@@ -155,6 +156,58 @@ func TestPoller_UpdateStatus(t *testing.T) {
 	}
 	if receivedError != "paper jam" {
 		t.Errorf("error = %q, want 'paper jam'", receivedError)
+	}
+}
+
+func TestPoller_UpdateStatus_RetriesThenSucceeds(t *testing.T) {
+	// Speed up the test — no need to wait real seconds for backoff.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError) // simulate transient failure
+			return
+		}
+		w.WriteHeader(200) // succeeds on 3rd attempt
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "key", PollIntervalSeconds: 5})
+	p.updateStatus("job-retry", JobStatusCompleted, "")
+
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 0 {
+		t.Errorf("StatusUpdateFailures() = %d, want 0 (eventually succeeded)", got)
+	}
+}
+
+func TestPoller_UpdateStatus_AllAttemptsFail(t *testing.T) {
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable) // always fails
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "key", PollIntervalSeconds: 5})
+	p.updateStatus("job-dead", JobStatusFailed, "printer offline")
+
+	wantAttempts := int32(len(statusUpdateBackoffs) + 1)
+	if got := atomic.LoadInt32(&attempts); got != wantAttempts {
+		t.Errorf("attempts = %d, want %d", got, wantAttempts)
+	}
+	if got := p.StatusUpdateFailures(); got != 1 {
+		t.Errorf("StatusUpdateFailures() = %d, want 1", got)
 	}
 }
 
