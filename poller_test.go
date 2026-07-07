@@ -161,6 +161,8 @@ func TestPoller_UpdateStatus(t *testing.T) {
 // ─── Poller Process Job — End-to-End Print Simulation ──────────────────────
 
 func TestPoller_ProcessJob_NetworkPrint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer (TCP)
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -292,6 +294,8 @@ func TestPoller_ProcessJob_UnreachableTimeout(t *testing.T) {
 }
 
 func TestPoller_ProcessJob_NoPrinter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	var statusUpdate string
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -394,6 +398,8 @@ func TestPoller_JobAge(t *testing.T) {
 // ─── Full E2E: Claim → Print → Status ──────────────────────────────────────
 
 func TestPoller_E2E_ClaimPrintStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

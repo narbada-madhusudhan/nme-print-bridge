@@ -184,6 +184,11 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	// Convert content to ESC/POS
 	escposData := contentToEscPos(job.Content)
 
+	// Crash-recovery journal: record the claim before printing so a crash
+	// between print and status-ack doesn't cause a duplicate reprint. See
+	// journal.go for the full design + reconcile semantics.
+	journalMark(job.ID, false)
+
 	// Print
 	var printErr error
 	if printerName != "" {
@@ -195,12 +200,19 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	}
 
 	if printErr != nil {
+		journalClear(job.ID)
 		p.updateStatus(job.ID, JobStatusFailed, printErr.Error())
 		log.Printf("[poller] Job %s: print failed: %v", job.ID, printErr)
 		return
 	}
 
-	p.updateStatus(job.ID, JobStatusCompleted, "")
+	// Print succeeded — flip the marker. A crash from here on is recovered
+	// at next startup by reconcileJournal re-reporting COMPLETED.
+	journalMark(job.ID, true)
+
+	if p.updateStatus(job.ID, JobStatusCompleted, "") {
+		journalClear(job.ID)
+	}
 	p.jobsProcessed.Add(1)
 	target := printerName
 	if target == "" && job.Printer != nil {
@@ -209,7 +221,14 @@ func (p *Poller) processJob(job claimedJob, reachable map[string]bool) {
 	log.Printf("[poller] Job %s: printed to %s", job.ID, target)
 }
 
-func (p *Poller) updateStatus(jobID, status, errMsg string) {
+// updateStatus PATCHes the job's status to resort-os. It returns whether the
+// report is "settled" from the bridge's point of view — a 2xx (accepted, or
+// a safe no-op if the job was already terminal), or a 404 (the job no longer
+// exists, so nothing is left to duplicate-print). Callers use this to decide
+// whether it's safe to clear the crash-recovery journal entry for the job;
+// any other outcome (5xx, network error) is transient and worth retrying at
+// the next startup, so the entry is kept.
+func (p *Poller) updateStatus(jobID, status, errMsg string) bool {
 	url := fmt.Sprintf("%s/api/bridge/print-jobs/%s/status", p.config.AdminAPIURL, jobID)
 
 	payload := map[string]string{"status": status}
@@ -224,7 +243,7 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 	req, err := http.NewRequestWithContext(ctx, "PATCH", url, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[poller] Status update request failed: %v", err)
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if p.config.ServiceKey != "" {
@@ -234,9 +253,10 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) {
 	resp, err := p.client.Do(req)
 	if err != nil {
 		log.Printf("[poller] Status update for %s failed: %v", jobID, err)
-		return
+		return false
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	return (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusNotFound
 }
 
 func (p *Poller) jobAge(job claimedJob) time.Duration {

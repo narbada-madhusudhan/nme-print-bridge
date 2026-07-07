@@ -178,6 +178,7 @@ func main() {
 	if cfg.PollEnabled && cfg.AdminAPIURL != "" && cfg.ServiceKey != "" {
 		poller = NewPoller(cfg)
 		activePollerPtr.Store(poller)
+		poller.reconcileJournal()
 		poller.Start()
 		fmt.Printf("  Poller: ON (every %ds → %s)\n", cfg.PollIntervalSeconds, cfg.AdminAPIURL)
 		log.Printf("[poller] Started — polling %s every %ds",
