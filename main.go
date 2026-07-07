@@ -195,8 +195,12 @@ func main() {
 			log.Printf("[update] Update %s available but no download URL for this platform", info.LatestVersion)
 			return
 		}
+		if !cfg.AutoUpdateEnabled {
+			log.Printf("[update] Update %s available (current %s) — auto-update disabled; enable \"auto_update_enabled\" in config.json or call POST /update/apply", info.LatestVersion, info.CurrentVersion)
+			return
+		}
 		log.Printf("[update] Auto-updating: %s → %s", info.CurrentVersion, info.LatestVersion)
-		if err := performUpdate(info.DownloadURL); err != nil {
+		if err := performUpdate(info); err != nil {
 			log.Printf("[update] Auto-update failed: %v", err)
 		}
 	}()

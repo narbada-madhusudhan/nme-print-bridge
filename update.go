@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,11 +23,18 @@ import (
 
 const GitHubRepo = "narbada-madhusudhan/nme-print-bridge"
 
+// ChecksumsAssetName is the release asset expected to contain SHA256 hashes
+// for every published binary, one per line: "<hex hash>  <asset file name>".
+// Releases that don't publish this asset fail closed — no auto-update.
+const ChecksumsAssetName = "SHA256SUMS"
+
 type UpdateInfo struct {
 	Available      bool   `json:"available"`
 	CurrentVersion string `json:"current_version"`
 	LatestVersion  string `json:"latest_version"`
 	DownloadURL    string `json:"download_url,omitempty"`
+	AssetName      string `json:"asset_name,omitempty"`
+	ChecksumsURL   string `json:"checksums_url,omitempty"`
 	ReleaseURL     string `json:"release_url,omitempty"`
 }
 
@@ -113,7 +122,10 @@ func checkForUpdate() (*UpdateInfo, error) {
 	for _, asset := range release.Assets {
 		if strings.HasSuffix(asset.Name, suffix) {
 			info.DownloadURL = asset.BrowserDownloadURL
-			break
+			info.AssetName = asset.Name
+		}
+		if asset.Name == ChecksumsAssetName {
+			info.ChecksumsURL = asset.BrowserDownloadURL
 		}
 	}
 
@@ -122,7 +134,42 @@ func checkForUpdate() (*UpdateInfo, error) {
 	return info, nil
 }
 
-func performUpdate(downloadURL string) error {
+// fetchExpectedChecksum downloads the SHA256SUMS-style manifest at
+// checksumsURL and returns the lowercase hex hash listed for assetName.
+// Manifest format: "<hex hash>  <file name>" (one entry per line; the
+// standard `sha256sum` output, with an optional leading "*" for binary mode).
+func fetchExpectedChecksum(checksumsURL, assetName string) (string, error) {
+	client := &http.Client{Timeout: time.Duration(UpdateCheckTimeout) * time.Second}
+	resp, err := client.Get(checksumsURL)
+	if err != nil {
+		return "", fmt.Errorf("download checksums manifest failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("checksums manifest download returned %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // manifest is a few KB at most
+	if err != nil {
+		return "", fmt.Errorf("read checksums manifest failed: %w", err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[1], "*")
+		if name == assetName {
+			return strings.ToLower(fields[0]), nil
+		}
+	}
+	return "", fmt.Errorf("no checksum entry for %s in %s", assetName, ChecksumsAssetName)
+}
+
+func performUpdate(info *UpdateInfo) error {
+	downloadURL := info.DownloadURL
 	trusted := false
 	for _, prefix := range TrustedDownloadPrefixes {
 		if strings.HasPrefix(downloadURL, prefix) {
@@ -132,6 +179,17 @@ func performUpdate(downloadURL string) error {
 	}
 	if !trusted {
 		return fmt.Errorf("untrusted download URL: %s", downloadURL)
+	}
+
+	// Fail closed: refuse to auto-update if the release doesn't publish a
+	// checksums manifest, or if it can't be fetched/parsed. A tampered or
+	// unverifiable binary must never be applied.
+	if info.ChecksumsURL == "" {
+		return fmt.Errorf("update skipped: release %s does not publish a %s asset — cannot verify binary integrity before applying", info.LatestVersion, ChecksumsAssetName)
+	}
+	expectedHash, err := fetchExpectedChecksum(info.ChecksumsURL, info.AssetName)
+	if err != nil {
+		return fmt.Errorf("update skipped: checksum verification unavailable: %w", err)
 	}
 
 	exePath, err := os.Executable()
@@ -161,12 +219,19 @@ func performUpdate(downloadURL string) error {
 		return fmt.Errorf("cannot create temp file: %w", err)
 	}
 
-	if _, err := io.Copy(tmpFile, io.LimitReader(resp.Body, MaxDownloadSize)); err != nil {
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(resp.Body, MaxDownloadSize)); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("download write failed: %w", err)
 	}
 	tmpFile.Close()
+
+	if actualHash := hex.EncodeToString(hasher.Sum(nil)); actualHash != expectedHash {
+		os.Remove(tmpPath)
+		return fmt.Errorf("checksum mismatch for %s: expected %s, got %s — refusing to apply update", info.AssetName, expectedHash, actualHash)
+	}
+	log.Printf("[update] Checksum verified (sha256 %s)", expectedHash)
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		os.Remove(tmpPath)
@@ -237,12 +302,16 @@ func handleUpdateApply(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 400, Response{Success: false, Error: "No update available"})
 		return
 	}
+	if info.ChecksumsURL == "" {
+		writeJSON(w, 400, Response{Success: false, Error: "Update available but cannot be verified (no " + ChecksumsAssetName + " asset published) — refusing to apply"})
+		return
+	}
 
 	writeJSON(w, 200, Response{Success: true, Message: "Updating... NME Print Bridge will restart."})
 
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		if err := performUpdate(info.DownloadURL); err != nil {
+		if err := performUpdate(info); err != nil {
 			log.Printf("[update] Failed: %v", err)
 		}
 	}()

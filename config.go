@@ -18,6 +18,10 @@ type Config struct {
 	PollEnabled         bool     `json:"poll_enabled"`
 	PollIntervalSeconds int      `json:"poll_interval_seconds"`
 	AllowedOrigins      []string `json:"allowed_origins,omitempty"`
+	// AutoUpdateEnabled gates automatic self-update on startup. Defaults to
+	// false (off): the bridge only logs "update available" and never
+	// replaces its own binary unless this is explicitly set true.
+	AutoUpdateEnabled bool `json:"auto_update_enabled"`
 }
 
 func configDir() string {
