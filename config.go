@@ -34,15 +34,11 @@ func configPath() string {
 }
 
 func loadConfig() Config {
-	cfg := Config{CertURL: DefaultCertURL}
-	data, err := os.ReadFile(configPath())
-	if err != nil {
-		cfg.PollIntervalSeconds = DefaultPollInterval
-		cfg.AllowedOrigins = append([]string(nil), DefaultAllowedOrigins...)
-		return cfg
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		log.Printf("[config] Warning: failed to parse config.json: %v", err)
+	cfg := Config{CertURL: DefaultCertURL, PollIntervalSeconds: DefaultPollInterval}
+	if data, err := os.ReadFile(configPath()); err == nil {
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			log.Printf("[config] Warning: failed to parse config.json: %v", err)
+		}
 	}
 	if cfg.CertURL == "" {
 		cfg.CertURL = DefaultCertURL
@@ -50,11 +46,11 @@ func loadConfig() Config {
 	if cfg.PollIntervalSeconds < MinPollInterval {
 		cfg.PollIntervalSeconds = DefaultPollInterval
 	}
-	if len(cfg.AllowedOrigins) == 0 {
-		// First run (or config predates this field): seed with the
-		// built-in defaults. From here on, config.json is authoritative —
-		// edit allowed_origins there to rotate endpoints without a rebuild.
-		cfg.AllowedOrigins = append([]string(nil), DefaultAllowedOrigins...)
+	// DefaultAllowedOrigins is an always-present floor (owner decision, M6):
+	// config.json can ADD origins but never DROP the built-ins, so union
+	// them in every load rather than only seeding them on first run.
+	for _, origin := range DefaultAllowedOrigins {
+		cfg.AllowedOrigins = addUnique(cfg.AllowedOrigins, origin)
 	}
 	return cfg
 }
@@ -64,6 +60,8 @@ func saveConfig(cfg Config) {
 	os.MkdirAll(dir, 0700)
 	// MkdirAll leaves an already-existing dir's mode untouched, so chmod
 	// explicitly — this tightens dirs from older installs that predate 0700.
+	// Note: Unix perm bits are a no-op on Windows (resort front-desk PCs) —
+	// real lockdown there needs an ACL; TODO if that's ever in scope.
 	os.Chmod(dir, 0700)
 	data, _ := json.MarshalIndent(cfg, "", "  ")
 	os.WriteFile(configPath(), data, 0600)

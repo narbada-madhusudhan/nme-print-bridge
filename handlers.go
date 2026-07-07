@@ -193,9 +193,7 @@ func handleSetPollConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if cfg.PollEnabled {
-		poller := NewPoller(cfg)
-		activePollerPtr.Store(poller)
-		poller.Start()
+		startPoller(cfg)
 		log.Printf("[poller] Started with new config — polling %s every %ds",
 			cfg.AdminAPIURL, cfg.PollIntervalSeconds)
 	} else {

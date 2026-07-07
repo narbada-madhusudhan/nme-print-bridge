@@ -214,6 +214,8 @@ func TestPoller_UpdateStatus_AllAttemptsFail(t *testing.T) {
 // ─── Poller Process Job — End-to-End Print Simulation ──────────────────────
 
 func TestPoller_ProcessJob_NetworkPrint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer (TCP)
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -312,6 +314,41 @@ func TestPoller_ProcessJob_UnreachablePrinter(t *testing.T) {
 	}
 }
 
+func TestPoller_ProcessJob_UnreachablePrinter_ReleaseDoesNotRetry(t *testing.T) {
+	// M3: the PENDING-release path must send at most one PATCH, even when
+	// the backoff schedule would otherwise cause retries — a lost release
+	// just waits out UnreachableTimeoutSec on the next poll instead of
+	// risking a stale PENDING landing after another hub re-claims the job.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var calls int32
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable) // always fails
+	}))
+	defer apiServer.Close()
+
+	p := NewPoller(Config{AdminAPIURL: apiServer.URL, PollIntervalSeconds: 5})
+	pName := "UnknownPrinter"
+	job := claimedJob{
+		ID:        "job-unreach-noretry",
+		Content:   json.RawMessage(`{"text":"test"}`),
+		CreatedAt: time.Now().Format(time.RFC3339),
+		Printer:   &jobPrinter{PrinterName: &pName},
+	}
+
+	p.processJob(job, map[string]bool{"KitchenPrinter": true})
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("expected exactly 1 PATCH call (no retry), got %d", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 0 {
+		t.Errorf("StatusUpdateFailures() = %d, want 0 (no-retry path doesn't count failures)", got)
+	}
+}
+
 func TestPoller_ProcessJob_UnreachableTimeout(t *testing.T) {
 	var statusUpdate string
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +382,8 @@ func TestPoller_ProcessJob_UnreachableTimeout(t *testing.T) {
 }
 
 func TestPoller_ProcessJob_NoPrinter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	var statusUpdate string
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -447,6 +486,8 @@ func TestPoller_JobAge(t *testing.T) {
 // ─── Full E2E: Claim → Print → Status ──────────────────────────────────────
 
 func TestPoller_E2E_ClaimPrintStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

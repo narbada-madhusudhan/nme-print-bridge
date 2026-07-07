@@ -72,6 +72,7 @@ const (
 	ConfigDirName = ".printbridge"
 	ConfigFile    = "config.json"
 	CertCacheFile = "cert-cache.json"
+	JournalFile   = "journal.json"
 	LogFile       = "bridge.log"
 
 	LaunchAgentLabel = "com.nme.print-bridge"

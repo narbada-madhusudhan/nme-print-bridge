@@ -136,15 +136,32 @@ func TestLoadConfig_AllowedOriginsRotateViaConfigFile(t *testing.T) {
 	cfgDir := filepath.Join(tmpDir, ConfigDirName)
 	os.MkdirAll(cfgDir, 0755)
 
-	// Operator rotates the endpoint by editing config.json directly —
-	// no rebuild needed, and the built-in defaults are NOT force-merged back in.
+	// Operator adds a custom origin by editing config.json directly — no
+	// rebuild needed. The built-in defaults are an always-present floor
+	// (M6): they're unioned in, never dropped, even when config.json
+	// already lists other origins.
 	custom := Config{AllowedOrigins: []string{"https://new-endpoint.example.com"}}
 	data, _ := json.Marshal(custom)
 	os.WriteFile(filepath.Join(cfgDir, ConfigFile), data, 0600)
 
 	loaded := loadConfig()
-	if len(loaded.AllowedOrigins) != 1 || loaded.AllowedOrigins[0] != "https://new-endpoint.example.com" {
-		t.Errorf("AllowedOrigins = %v, want only the rotated origin", loaded.AllowedOrigins)
+	if len(loaded.AllowedOrigins) != len(DefaultAllowedOrigins)+1 {
+		t.Fatalf("AllowedOrigins = %v, want custom origin + %d defaults", loaded.AllowedOrigins, len(DefaultAllowedOrigins))
+	}
+	if loaded.AllowedOrigins[0] != "https://new-endpoint.example.com" {
+		t.Errorf("AllowedOrigins[0] = %q, want custom origin first", loaded.AllowedOrigins[0])
+	}
+	for _, want := range DefaultAllowedOrigins {
+		found := false
+		for _, got := range loaded.AllowedOrigins {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("AllowedOrigins missing default %q, got %v", want, loaded.AllowedOrigins)
+		}
 	}
 }
 
