@@ -24,6 +24,15 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.PollEnabled {
 		t.Error("PollEnabled should default to false")
 	}
+	if cfg.AutoUpdateEnabled {
+		t.Error("AutoUpdateEnabled should default to false (fail closed on binary self-replace)")
+	}
+}
+
+func TestDevMode_DefaultsToFalse(t *testing.T) {
+	if isDevMode() {
+		t.Error("DevMode should default to \"false\" — production-safe unless overridden at build time")
+	}
 }
 
 func TestLoadConfig_FromFile(t *testing.T) {

@@ -4,8 +4,9 @@ package main
 // Override at compile time: go build -ldflags "-X main.Version=v2.0.0 -X main.DevMode=false"
 
 // DevMode controls whether localhost origins are allowed.
-// Set to "false" at build time for production releases.
-var DevMode = "true"
+// Defaults to "false" (production-safe); override for local dev with:
+// go build -ldflags "-X main.DevMode=true"
+var DevMode = "false"
 
 // ─── Network ───────────────────────────────────────────────────────────────
 
