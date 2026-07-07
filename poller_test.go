@@ -211,6 +211,34 @@ func TestPoller_UpdateStatus_AllAttemptsFail(t *testing.T) {
 	}
 }
 
+func TestPoller_UpdateStatus_PermanentClientError_NoRetry(t *testing.T) {
+	// A 401 (e.g. bad/rotated X-Bridge-Key, now enforced by resort-os BR-113)
+	// is permanent — it must fail fast (single attempt) and still be counted.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusUnauthorized) // permanent — must not be retried
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "bad-key", PollIntervalSeconds: 5})
+	settled := p.updateStatus("job-401", JobStatusCompleted, "")
+
+	if settled {
+		t.Error("updateStatus() = true, want false (permanent 401 is not settled)")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (permanent 4xx must not retry)", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 1 {
+		t.Errorf("StatusUpdateFailures() = %d, want 1 (permanent failure counted)", got)
+	}
+}
+
 // ─── Poller Process Job — End-to-End Print Simulation ──────────────────────
 
 func TestPoller_ProcessJob_NetworkPrint(t *testing.T) {

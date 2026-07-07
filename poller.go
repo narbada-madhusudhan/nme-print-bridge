@@ -300,6 +300,12 @@ func (p *Poller) updateStatus(jobID, status, errMsg string) bool {
 			log.Printf("[poller] Status update for %s failed (attempt %d/%d): %v", jobID, attempt, maxAttempts, err)
 		}
 		if !retry {
+			if !settled {
+				// Permanent, non-retryable failure (e.g. 401/403 bad key) —
+				// count it for observability. A 2xx/404 is settled, not a failure.
+				p.statusUpdateFailures.Add(1)
+				log.Printf("[poller] Status update for %s failed permanently: %v", jobID, lastErr)
+			}
 			return settled
 		}
 	}
@@ -332,8 +338,9 @@ func (p *Poller) reportStatusNoRetry(jobID, status, errMsg string) {
 // sendStatusUpdate performs a single PATCH attempt. It returns:
 //   - settled: true when this outcome is final and needs no retry (2xx or
 //     404)
-//   - retry: true when the caller should retry (network/request error, or
-//     any other non-2xx/404 response)
+//   - retry: true for transient failures (network/request error, 5xx, 408,
+//     429); false for a permanent 4xx (bad key / bad payload), which fails
+//     fast unsettled
 //   - err: the observed error, if any, for logging
 func (p *Poller) sendStatusUpdate(url string, body []byte) (settled bool, retry bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(PollStatusUpdateTimeout)*time.Second)
@@ -359,6 +366,16 @@ func (p *Poller) sendStatusUpdate(url string, body []byte) (settled bool, retry 
 	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return true, false, nil
+	}
+	// A 4xx (other than 408/429) is a permanent client error — a bad/rotated
+	// X-Bridge-Key (401/403, now enforced by resort-os BR-113) or a malformed
+	// payload (400) will never succeed on retry, so fail fast instead of
+	// burning the whole backoff schedule. 5xx / 408 / 429 / network are
+	// transient → retry.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 &&
+		resp.StatusCode != http.StatusRequestTimeout &&
+		resp.StatusCode != http.StatusTooManyRequests {
+		return false, false, fmt.Errorf("status update returned %d (permanent)", resp.StatusCode)
 	}
 	return false, true, fmt.Errorf("status update returned %d", resp.StatusCode)
 }
