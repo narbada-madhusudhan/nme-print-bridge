@@ -31,7 +31,6 @@ import (
 // Version is set at build time via: go build -ldflags "-X main.Version=vX.Y.Z"
 var Version = "dev"
 
-
 // Root public key — baked in at compile time via ldflags
 // Override with: go build -ldflags "-X main.RootPublicKeyB64=..."
 var RootPublicKeyB64 = "PYpHIvPZS5ynAaz2iUy0iD3FAiizQ1Wi0Ee7AUHb2Ho="
@@ -39,10 +38,10 @@ var RootPublicKeyB64 = "PYpHIvPZS5ynAaz2iUy0iD3FAiizQ1Wi0Ee7AUHb2Ho="
 // Default cert URL — override via config or CLI flag
 var DefaultCertURL = "https://printbridge.narbadatech.com/api/certs"
 
-// Built-in allowed origins — always allowed regardless of certificate.
-// These are baked in for production use before the central cert API is live.
-// Remove once cert system is fully deployed.
-var BuiltInAllowedOrigins = []string{
+// Default allowed origins — seeded into config.json's allowed_origins on
+// first run (see loadConfig). Editing config.json rotates the endpoint set
+// without a rebuild; this var only supplies the initial defaults.
+var DefaultAllowedOrigins = []string{
 	"https://godawariresort.com",
 	"http://godawariresort.com",
 	"https://admin.godawariresort.com",
@@ -56,7 +55,7 @@ func main() {
 	// On Windows (-H windowsgui), stdout/stderr go nowhere.
 	// Write logs to a file so errors are diagnosable.
 	if runtime.GOOS == "windows" {
-		os.MkdirAll(configDir(), 0755)
+		os.MkdirAll(configDir(), 0700)
 		logPath := filepath.Join(configDir(), LogFile)
 		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644); err == nil {
 			log.SetOutput(logFile)
@@ -69,7 +68,7 @@ func main() {
 	certURL := flag.String("cert-url", "", "Certificate API URL")
 	adminAPIURL := flag.String("admin-api-url", "", "Admin API URL for print job polling")
 	branchID := flag.String("branch-id", "", "Restaurant branch ID for print job polling")
-	serviceKey := flag.String("service-key", "", "Service key for admin API authentication")
+	serviceKey := flag.String("service-key", "", "DEPRECATED: service key for admin API authentication (visible in shell history / process list). Set $SERVICE_KEY instead")
 	poll := flag.Bool("poll", false, "Enable background print job polling")
 	install := flag.Bool("install", false, "Install auto-start (runs on login)")
 	uninstall := flag.Bool("uninstall", false, "Remove auto-start")
@@ -108,12 +107,17 @@ func main() {
 		cfg.RestaurantBranchID = *branchID
 	}
 	if *serviceKey != "" {
+		fmt.Fprintln(os.Stderr, "  ⚠ -service-key is deprecated and insecure (visible in shell history / process list). Set the SERVICE_KEY environment variable instead.")
 		cfg.ServiceKey = *serviceKey
 	}
 	if *poll {
 		cfg.PollEnabled = true
 	}
 	saveConfig(cfg)
+
+	// $SERVICE_KEY always wins over whatever's on disk, and is deliberately
+	// applied AFTER saveConfig so it never gets persisted to config.json.
+	cfg.ServiceKey = resolveServiceKey(cfg.ServiceKey)
 
 	cm, err := NewCertManager(cfg)
 	if err != nil {
@@ -176,9 +180,7 @@ func main() {
 	// Start background print job poller (activePoller is read by status handler)
 	var poller *Poller
 	if cfg.PollEnabled && cfg.AdminAPIURL != "" && cfg.ServiceKey != "" {
-		poller = NewPoller(cfg)
-		activePollerPtr.Store(poller)
-		poller.Start()
+		poller = startPoller(cfg)
 		fmt.Printf("  Poller: ON (every %ds → %s)\n", cfg.PollIntervalSeconds, cfg.AdminAPIURL)
 		log.Printf("[poller] Started — polling %s every %ds",
 			cfg.AdminAPIURL, cfg.PollIntervalSeconds)
@@ -195,8 +197,12 @@ func main() {
 			log.Printf("[update] Update %s available but no download URL for this platform", info.LatestVersion)
 			return
 		}
+		if !cfg.AutoUpdateEnabled {
+			log.Printf("[update] Update %s available (current %s) — auto-update disabled; enable \"auto_update_enabled\" in config.json or call POST /update/apply", info.LatestVersion, info.CurrentVersion)
+			return
+		}
 		log.Printf("[update] Auto-updating: %s → %s", info.CurrentVersion, info.LatestVersion)
-		if err := performUpdate(info.DownloadURL); err != nil {
+		if err := performUpdate(info); err != nil {
 			log.Printf("[update] Auto-update failed: %v", err)
 		}
 	}()

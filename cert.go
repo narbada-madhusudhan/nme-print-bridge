@@ -58,12 +58,9 @@ func NewCertManager(cfg Config) (*CertManager, error) {
 		cm.allowedOrigins[origin] = true
 	}
 
-	// Built-in production origins (hardcoded for this version)
-	for _, origin := range BuiltInAllowedOrigins {
-		cm.allowedOrigins[origin] = true
-	}
-
-	// Config-based origins (set via /config/poll or config.json)
+	// Config-based origins (set via /config/poll or config.json; loadConfig
+	// seeds this with DefaultAllowedOrigins on first run, so this loop
+	// covers both the built-in defaults and any operator-added origins)
 	for _, origin := range cfg.AllowedOrigins {
 		cm.allowedOrigins[origin] = true
 	}
@@ -174,10 +171,8 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 	for _, origin := range LocalhostOrigins {
 		cm.allowedOrigins[origin] = true
 	}
-	for _, origin := range BuiltInAllowedOrigins {
-		cm.allowedOrigins[origin] = true
-	}
-	// Config-based origins (from /config/poll)
+	// Config-based origins (from config.json / /config/poll; includes the
+	// built-in defaults via loadConfig's seeding — see NewCertManager)
 	cfg := loadConfig()
 	for _, origin := range cfg.AllowedOrigins {
 		cm.allowedOrigins[origin] = true
@@ -188,7 +183,7 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 }
 
 func (cm *CertManager) cacheCert(cert *SignedCert) {
-	os.MkdirAll(configDir(), 0755)
+	os.MkdirAll(configDir(), 0700)
 	data, _ := json.MarshalIndent(cert, "", "  ")
 	os.WriteFile(cm.cachePath, data, 0600)
 }

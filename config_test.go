@@ -24,6 +24,15 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	if cfg.PollEnabled {
 		t.Error("PollEnabled should default to false")
 	}
+	if cfg.AutoUpdateEnabled {
+		t.Error("AutoUpdateEnabled should default to false (fail closed on binary self-replace)")
+	}
+}
+
+func TestDevMode_DefaultsToFalse(t *testing.T) {
+	if isDevMode() {
+		t.Error("DevMode should default to \"false\" — production-safe unless overridden at build time")
+	}
 }
 
 func TestLoadConfig_FromFile(t *testing.T) {
@@ -101,6 +110,61 @@ func TestLoadConfig_PollIntervalMinimum(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_AllowedOriginsDefaultsOnFirstRun(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfg := loadConfig()
+	if len(cfg.AllowedOrigins) != len(DefaultAllowedOrigins) {
+		t.Fatalf("AllowedOrigins = %v, want defaults %v", cfg.AllowedOrigins, DefaultAllowedOrigins)
+	}
+	for i, origin := range DefaultAllowedOrigins {
+		if cfg.AllowedOrigins[i] != origin {
+			t.Errorf("AllowedOrigins[%d] = %q, want %q", i, cfg.AllowedOrigins[i], origin)
+		}
+	}
+}
+
+func TestLoadConfig_AllowedOriginsRotateViaConfigFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	cfgDir := filepath.Join(tmpDir, ConfigDirName)
+	os.MkdirAll(cfgDir, 0755)
+
+	// Operator adds a custom origin by editing config.json directly — no
+	// rebuild needed. The built-in defaults are an always-present floor
+	// (M6): they're unioned in, never dropped, even when config.json
+	// already lists other origins.
+	custom := Config{AllowedOrigins: []string{"https://new-endpoint.example.com"}}
+	data, _ := json.Marshal(custom)
+	os.WriteFile(filepath.Join(cfgDir, ConfigFile), data, 0600)
+
+	loaded := loadConfig()
+	if len(loaded.AllowedOrigins) != len(DefaultAllowedOrigins)+1 {
+		t.Fatalf("AllowedOrigins = %v, want custom origin + %d defaults", loaded.AllowedOrigins, len(DefaultAllowedOrigins))
+	}
+	if loaded.AllowedOrigins[0] != "https://new-endpoint.example.com" {
+		t.Errorf("AllowedOrigins[0] = %q, want custom origin first", loaded.AllowedOrigins[0])
+	}
+	for _, want := range DefaultAllowedOrigins {
+		found := false
+		for _, got := range loaded.AllowedOrigins {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("AllowedOrigins missing default %q, got %v", want, loaded.AllowedOrigins)
+		}
+	}
+}
+
 func TestSaveConfig_RoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
@@ -129,18 +193,77 @@ func TestSaveConfig_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestResolveServiceKey_EnvOverridesConfig(t *testing.T) {
+	origEnv, hadEnv := os.LookupEnv("SERVICE_KEY")
+	defer func() {
+		if hadEnv {
+			os.Setenv("SERVICE_KEY", origEnv)
+		} else {
+			os.Unsetenv("SERVICE_KEY")
+		}
+	}()
+
+	os.Setenv("SERVICE_KEY", "env-key")
+	if got := resolveServiceKey("file-key"); got != "env-key" {
+		t.Errorf("resolveServiceKey() = %q, want env value %q", got, "env-key")
+	}
+
+	os.Unsetenv("SERVICE_KEY")
+	if got := resolveServiceKey("file-key"); got != "file-key" {
+		t.Errorf("resolveServiceKey() = %q, want fallback %q", got, "file-key")
+	}
+
+	os.Setenv("SERVICE_KEY", "")
+	if got := resolveServiceKey("file-key"); got != "file-key" {
+		t.Errorf("resolveServiceKey() with empty env = %q, want fallback %q", got, "file-key")
+	}
+}
+
+func TestSaveConfig_DirPermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Simulate an existing install whose config dir predates the 0700
+	// hardening (os.MkdirAll alone won't tighten an already-existing dir,
+	// so this must exercise the chmod path, not just the create path).
+	cfgDir := filepath.Join(tmpDir, ConfigDirName)
+	if err := os.MkdirAll(cfgDir, 0755); err != nil {
+		t.Fatalf("pre-create configDir: %v", err)
+	}
+
+	saveConfig(Config{ServiceKey: "secret"})
+
+	info, err := os.Stat(configDir())
+	if err != nil {
+		t.Fatalf("configDir stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0700 {
+		t.Errorf("configDir perm = %o, want 0700 (pre-existing 0755 dir should be tightened)", perm)
+	}
+
+	fileInfo, err := os.Stat(configPath())
+	if err != nil {
+		t.Fatalf("configPath stat: %v", err)
+	}
+	if perm := fileInfo.Mode().Perm(); perm != 0600 {
+		t.Errorf("configPath perm = %o, want 0600", perm)
+	}
+}
+
 func TestCompareSemver(t *testing.T) {
 	tests := []struct {
 		a, b string
 		want int
 	}{
 		{"v1.0.0", "v1.0.0", 0},
-		{"v2.0.0", "v1.0.0", 1},    // positive = a > b
-		{"v1.0.0", "v2.0.0", -1},   // negative = a < b
-		{"v1.10.0", "v1.9.0", 1},   // semver not lexicographic
+		{"v2.0.0", "v1.0.0", 1},  // positive = a > b
+		{"v1.0.0", "v2.0.0", -1}, // negative = a < b
+		{"v1.10.0", "v1.9.0", 1}, // semver not lexicographic
 		{"v2.0.0", "v1.99.99", 1},
 		{"v1.0.1", "v1.0.0", 1},
-		{"dev", "v1.0.0", 0},       // dev never triggers update
+		{"dev", "v1.0.0", 0}, // dev never triggers update
 		{"v1.0.0", "dev", 0},
 	}
 

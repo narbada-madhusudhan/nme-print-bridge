@@ -146,6 +146,18 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
+      # SHA256SUMS is required for the print-bridge self-updater to verify a
+      # downloaded binary before replacing itself (see update.go). Without
+      # this asset, the updater fails closed and skips the update.
+      - name: Generate checksums
+        run: |
+          sha256sum \
+            print-bridge-mac-arm64/print-bridge-mac-arm64 \
+            print-bridge-mac-amd64/print-bridge-mac-amd64 \
+            print-bridge-windows-amd64.exe/print-bridge-windows-amd64.exe \
+            print-bridge-linux-amd64/print-bridge-linux-amd64 \
+            | sed 's#.*/##' > SHA256SUMS
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -156,4 +168,5 @@ jobs:
             print-bridge-linux-amd64/print-bridge-linux-amd64
             nme-print-bridge-mac-arm64.dmg/nme-print-bridge-mac-arm64.dmg
             nme-print-bridge-mac-amd64.dmg/nme-print-bridge-mac-amd64.dmg
+            SHA256SUMS
           generate_release_notes: true

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -110,7 +111,7 @@ func TestPoller_ClaimJobs_APIFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(claimResponse{
 			Success: false,
-			Error:   &struct {
+			Error: &struct {
 				Message string `json:"message"`
 			}{Message: "database error"},
 		})
@@ -158,9 +159,91 @@ func TestPoller_UpdateStatus(t *testing.T) {
 	}
 }
 
+func TestPoller_UpdateStatus_RetriesThenSucceeds(t *testing.T) {
+	// Speed up the test — no need to wait real seconds for backoff.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, 2 * time.Millisecond, 5 * time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError) // simulate transient failure
+			return
+		}
+		w.WriteHeader(200) // succeeds on 3rd attempt
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "key", PollIntervalSeconds: 5})
+	p.updateStatus("job-retry", JobStatusCompleted, "")
+
+	if got := atomic.LoadInt32(&attempts); got != 3 {
+		t.Errorf("attempts = %d, want 3 (2 failures + 1 success)", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 0 {
+		t.Errorf("StatusUpdateFailures() = %d, want 0 (eventually succeeded)", got)
+	}
+}
+
+func TestPoller_UpdateStatus_AllAttemptsFail(t *testing.T) {
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusServiceUnavailable) // always fails
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "key", PollIntervalSeconds: 5})
+	p.updateStatus("job-dead", JobStatusFailed, "printer offline")
+
+	wantAttempts := int32(len(statusUpdateBackoffs) + 1)
+	if got := atomic.LoadInt32(&attempts); got != wantAttempts {
+		t.Errorf("attempts = %d, want %d", got, wantAttempts)
+	}
+	if got := p.StatusUpdateFailures(); got != 1 {
+		t.Errorf("StatusUpdateFailures() = %d, want 1", got)
+	}
+}
+
+func TestPoller_UpdateStatus_PermanentClientError_NoRetry(t *testing.T) {
+	// A 401 (e.g. bad/rotated X-Bridge-Key, now enforced by resort-os BR-113)
+	// is permanent — it must fail fast (single attempt) and still be counted.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusUnauthorized) // permanent — must not be retried
+	}))
+	defer server.Close()
+
+	p := NewPoller(Config{AdminAPIURL: server.URL, ServiceKey: "bad-key", PollIntervalSeconds: 5})
+	settled := p.updateStatus("job-401", JobStatusCompleted, "")
+
+	if settled {
+		t.Error("updateStatus() = true, want false (permanent 401 is not settled)")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("attempts = %d, want 1 (permanent 4xx must not retry)", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 1 {
+		t.Errorf("StatusUpdateFailures() = %d, want 1 (permanent failure counted)", got)
+	}
+}
+
 // ─── Poller Process Job — End-to-End Print Simulation ──────────────────────
 
 func TestPoller_ProcessJob_NetworkPrint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer (TCP)
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -259,6 +342,41 @@ func TestPoller_ProcessJob_UnreachablePrinter(t *testing.T) {
 	}
 }
 
+func TestPoller_ProcessJob_UnreachablePrinter_ReleaseDoesNotRetry(t *testing.T) {
+	// M3: the PENDING-release path must send at most one PATCH, even when
+	// the backoff schedule would otherwise cause retries — a lost release
+	// just waits out UnreachableTimeoutSec on the next poll instead of
+	// risking a stale PENDING landing after another hub re-claims the job.
+	origBackoffs := statusUpdateBackoffs
+	statusUpdateBackoffs = []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond}
+	defer func() { statusUpdateBackoffs = origBackoffs }()
+
+	var calls int32
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusServiceUnavailable) // always fails
+	}))
+	defer apiServer.Close()
+
+	p := NewPoller(Config{AdminAPIURL: apiServer.URL, PollIntervalSeconds: 5})
+	pName := "UnknownPrinter"
+	job := claimedJob{
+		ID:        "job-unreach-noretry",
+		Content:   json.RawMessage(`{"text":"test"}`),
+		CreatedAt: time.Now().Format(time.RFC3339),
+		Printer:   &jobPrinter{PrinterName: &pName},
+	}
+
+	p.processJob(job, map[string]bool{"KitchenPrinter": true})
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("expected exactly 1 PATCH call (no retry), got %d", got)
+	}
+	if got := p.StatusUpdateFailures(); got != 0 {
+		t.Errorf("StatusUpdateFailures() = %d, want 0 (no-retry path doesn't count failures)", got)
+	}
+}
+
 func TestPoller_ProcessJob_UnreachableTimeout(t *testing.T) {
 	var statusUpdate string
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -292,6 +410,8 @@ func TestPoller_ProcessJob_UnreachableTimeout(t *testing.T) {
 }
 
 func TestPoller_ProcessJob_NoPrinter(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	var statusUpdate string
 	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -394,6 +514,8 @@ func TestPoller_JobAge(t *testing.T) {
 // ─── Full E2E: Claim → Print → Status ──────────────────────────────────────
 
 func TestPoller_E2E_ClaimPrintStatus(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // processJob now writes the crash-recovery journal to configDir()
+
 	// Mock printer
 	printerListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
